@@ -1,0 +1,12 @@
+directories:
+  output: release
+  buildResources: build
+appId: com.zoehis.helper
+productName: zoehis-helper
+win:
+  target:
+    - target: dir
+      arch:
+        - x64
+files: []
+electronVersion: 28.3.3

@@ -1,0 +1,180 @@
+export interface TableColumn {
+  columnName: string;
+  dataType: string;
+  nullable: string;
+  dataDefault: string | null;
+  comments: string;
+  isPrimaryKey: boolean;
+}
+
+export interface TableIndex {
+  indexName: string;
+  columnName: string;
+  indexType: string;
+  uniqueness: string;
+}
+
+export interface TableInfo {
+  tableName: string;
+  comments: string;
+  columns: TableColumn[];
+  indexes: TableIndex[];
+}
+
+export interface DamengConnectionParams {
+  host: string;
+  port: number;
+  schema: string;
+  username: string;
+  password: string;
+}
+
+export async function testDamengConnection(params: DamengConnectionParams): Promise<{ success: boolean; message: string }> {
+  try {
+    const Connection = require('dmdb');
+    const conn = new Connection({
+      host: params.host,
+      port: params.port,
+      dba_user: params.username,
+      dba_password: params.password,
+      database: params.schema,
+    });
+    conn.close();
+    return { success: true, message: '达梦连接成功' };
+  } catch (error) {
+    return { success: false, message: (error as Error).message };
+  }
+}
+
+export async function getDamengTables(params: DamengConnectionParams): Promise<TableInfo[]> {
+  const Connection = require('dmdb');
+  const conn = new Connection({
+    host: params.host,
+    port: params.port,
+    dba_user: params.username,
+    dba_password: params.password,
+    database: params.schema,
+  });
+
+  try {
+    const tablesResult = conn.execute(`
+      SELECT TABLE_NAME
+      FROM USER_TABLES
+      ORDER BY TABLE_NAME
+    `);
+
+    const tables: TableInfo[] = [];
+
+    for (const row of tablesResult.rows || []) {
+      const tableName = row[0] as string;
+
+      const columnsResult = conn.execute(`
+        SELECT
+          col.COLUMN_NAME,
+          col.DATA_TYPE,
+          col.NULLABLE,
+          col.DATA_DEFAULT,
+          com.COMMENTS
+        FROM USER_TAB_COLUMNS col
+        LEFT JOIN USER_COL_COMMENTS com ON col.TABLE_NAME = com.TABLE_NAME AND col.COLUMN_NAME = com.COLUMN_NAME
+        WHERE col.TABLE_NAME = '${tableName}'
+        ORDER BY col.COLUMN_ID
+      `);
+
+      const columns: TableColumn[] = [];
+      const primaryKeys: Set<string> = new Set();
+
+      const pkResult = conn.execute(`
+        SELECT col.column_name
+        FROM USER_constraints con
+        JOIN USER_cons_columns col ON con.constraint_name = col.constraint_name
+        WHERE con.constraint_type = 'P' AND con.table_name = '${tableName}'
+      `);
+
+      for (const pkRow of pkResult.rows || []) {
+        primaryKeys.add(pkRow[0] as string);
+      }
+
+      for (const colRow of columnsResult.rows || []) {
+        columns.push({
+          columnName: colRow[0] as string,
+          dataType: colRow[1] as string,
+          nullable: colRow[2] as string,
+          dataDefault: colRow[3] as string | null,
+          comments: (colRow[4] as string) || '',
+          isPrimaryKey: primaryKeys.has(colRow[0] as string),
+        });
+      }
+
+      const indexesResult = conn.execute(`
+        SELECT
+          ind.INDEX_NAME,
+          indc.COLUMN_NAME,
+          ind.INDEX_TYPE,
+          ind.UNIQUENESS
+        FROM USER_INDEXES ind
+        JOIN USER_IND_COLUMNS indc ON ind.INDEX_NAME = indc.INDEX_NAME
+        WHERE ind.TABLE_NAME = '${tableName}' AND ind.INDEX_TYPE != 'LOB'
+      `);
+
+      const indexes: TableIndex[] = [];
+      for (const idxRow of indexesResult.rows || []) {
+        indexes.push({
+          indexName: idxRow[0] as string,
+          columnName: idxRow[1] as string,
+          indexType: idxRow[2] as string,
+          uniqueness: idxRow[3] as string,
+        });
+      }
+
+      const commentsResult = conn.execute(`
+        SELECT COMMENTS FROM USER_TAB_COMMENTS WHERE TABLE_NAME = '${tableName}'
+      `);
+      const tableComments = (commentsResult.rows && commentsResult.rows[0] && commentsResult.rows[0][0]) || '';
+
+      tables.push({
+        tableName,
+        comments: tableComments as string,
+        columns,
+        indexes,
+      });
+    }
+
+    conn.close();
+    return tables;
+  } catch (error) {
+    conn.close();
+    throw error;
+  }
+}
+
+export async function executeDamengQuery(
+  params: DamengConnectionParams,
+  sql: string
+): Promise<{ columns: string[]; rows: any[][]; rowCount: number; executionTime: number }> {
+  const Connection = require('dmdb');
+  const conn = new Connection({
+    host: params.host,
+    port: params.port,
+    dba_user: params.username,
+    dba_password: params.password,
+    database: params.schema,
+  });
+
+  const startTime = Date.now();
+
+  try {
+    const result = conn.execute(sql);
+    const executionTime = Date.now() - startTime;
+
+    const columns = result.metaData ? result.metaData.map((col: any) => col.name) : [];
+    const rows = result.rows || [];
+    const rowCount = rows.length;
+
+    conn.close();
+    return { columns, rows, rowCount, executionTime };
+  } catch (error) {
+    conn.close();
+    throw error;
+  }
+}
