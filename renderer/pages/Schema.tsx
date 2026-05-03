@@ -211,7 +211,7 @@ function Schema() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="flex flex-1">
       <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
         <div className="p-6 border-b border-gray-200">
           <h1 className="text-2xl font-bold text-gray-900">zoehis-helper</h1>
@@ -237,11 +237,11 @@ function Schema() {
       </div>
 
       {showDatasources ? (
-        <div className="flex-1 overflow-auto p-6">
+        <div className="flex-1 overflow-auto p-6 bg-gray-100">
           <DataSources />
         </div>
       ) : (
-        <div className="flex-1 flex h-full">
+        <div className="flex-1 flex">
           <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
             <div className="p-4 border-b border-gray-200">
               <div className="flex items-center justify-between mb-2">
@@ -283,13 +283,13 @@ function Schema() {
             </div>
           </div>
 
-          <div className="flex-1 bg-gray-50 p-6 overflow-auto">
+          <div className="flex-1 bg-gray-50 p-6 overflow-auto flex flex-col">
             {!selectedTable ? (
-              <div className="h-full flex items-center justify-center text-gray-500">
+              <div className="flex-1 flex items-center justify-center text-gray-500">
                 点击左侧表格查看表详情
               </div>
             ) : (
-              <div>
+              <div className="flex-1 flex flex-col overflow-hidden">
                 <div className="flex items-center justify-between mb-6">
                   <div>
                     <h2 className="text-xl font-bold">{selectedTable.tableName}</h2>
@@ -335,8 +335,8 @@ function Schema() {
                 </div>
 
                 {activeTab === 'columns' && (
-                  <>
-                    <div className="mb-4 p-3 bg-white rounded-lg flex items-center space-x-4">
+                  <div className="flex-1 flex flex-col overflow-hidden">
+                    <div className="mb-4 p-3 bg-white rounded-lg flex items-center space-x-4 flex-shrink-0">
                       <input
                         type="text"
                         placeholder="搜索列名或注释"
@@ -357,7 +357,7 @@ function Schema() {
                       )}
                     </div>
 
-                    <div className="overflow-x-auto bg-white rounded-lg shadow">
+                    <div className="flex-1 overflow-auto bg-white rounded-lg shadow">
                       <table className="min-w-full">
                         <thead className="bg-gray-50">
                           <tr>
@@ -402,13 +402,13 @@ function Schema() {
                         </tbody>
                       </table>
                     </div>
-                  </>
+                  </div>
                 )}
 
                 {activeTab === 'indexes' && selectedTable.indexes.length > 0 && (
-                  <div className="bg-white rounded-lg shadow overflow-x-auto">
+                  <div className="flex-1 overflow-auto bg-white rounded-lg shadow">
                     <table className="min-w-full">
-                      <thead className="bg-gray-50">
+                      <thead className="bg-gray-50 sticky top-0">
                         <tr>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-600">索引名</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-600">列名</th>
@@ -431,7 +431,7 @@ function Schema() {
                 )}
 
                 {activeTab === 'query' && (
-                  <div className="space-y-4">
+                  <div className="flex-1 overflow-auto space-y-4">
                     <div className="mb-4 p-3 bg-white rounded-lg flex items-center space-x-4">
                       <label className="flex items-center space-x-2 cursor-pointer whitespace-nowrap">
                         <input
