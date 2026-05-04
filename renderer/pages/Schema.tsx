@@ -44,6 +44,10 @@ function Schema() {
     setShowOnlyUsedFieldsByTable,
     getShowOnlyUsedFieldsByTable,
     setColumnSearchTerm,
+    sidebarCollapsed,
+    tableListCollapsed,
+    toggleSidebar,
+    toggleTableList,
   } = useDataSourceStore();
 
   useEffect(() => {
@@ -245,6 +249,10 @@ function Schema() {
   const executeQuery = async (table: TableInfo, tableName: string) => {
     if (!activeDataSource?.id) return;
     
+    // 执行查询时默认收缩左侧菜单和表列表
+    if (!sidebarCollapsed) toggleSidebar();
+    if (!tableListCollapsed) toggleTableList();
+    
     setIsExecuting(true);
     setQueryResults({
       ...queryResults,
@@ -274,26 +282,56 @@ function Schema() {
 
   return (
     <div className="flex flex-1">
-      <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
-        <div className="p-6 border-b border-gray-200">
-          <h1 className="text-2xl font-bold text-gray-900">zoehis-helper</h1>
+      {/* 左侧导航栏 */}
+      <div className={`${sidebarCollapsed ? 'w-14' : 'w-64'} bg-gradient-to-b from-slate-50 to-white border-r border-slate-200 flex flex-col transition-all duration-300 shadow-sm`}>
+        {/* 头部 */}
+        <div className="p-3 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-50">
+          {!sidebarCollapsed && (
+            <h1 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+              zoehis-helper
+            </h1>
+          )}
+          <button 
+            onClick={toggleSidebar} 
+            className="p-1.5 hover:bg-slate-200 rounded-full transition-all duration-200 text-slate-500 hover:text-slate-700 hover:shadow-md"
+            title={sidebarCollapsed ? '展开导航栏' : '收起导航栏'}
+          >
+            {sidebarCollapsed ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+              </svg>
+            )}
+          </button>
         </div>
         
-        <nav className="flex-1 p-4 space-y-2">
+        {/* 导航菜单 */}
+        <nav className="flex-1 p-3 space-y-1.5">
           <button
             onClick={() => setShowDatasources(false)}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${!showDatasources ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-700 hover:bg-gray-50'}`}
+            className={`w-full flex items-center justify-center ${!sidebarCollapsed ? 'space-x-3 px-3' : ''} py-2.5 rounded-xl transition-all duration-200 ${
+              !showDatasources 
+                ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-md shadow-blue-200' 
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
           >
-            <span className="text-lg">📊</span>
-            <span className="font-medium">数据查询</span>
+            <span className="text-xl">📊</span>
+            {!sidebarCollapsed && <span className="font-medium text-sm">数据查询</span>}
           </button>
           
           <button
             onClick={() => setShowDatasources(true)}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${showDatasources ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-gray-700 hover:bg-gray-50'}`}
+            className={`w-full flex items-center justify-center ${!sidebarCollapsed ? 'space-x-3 px-3' : ''} py-2.5 rounded-xl transition-all duration-200 ${
+              showDatasources 
+                ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-md shadow-blue-200' 
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
           >
-            <span className="text-lg">🔌</span>
-            <span className="font-medium">数据源管理</span>
+            <span className="text-xl">🔌</span>
+            {!sidebarCollapsed && <span className="font-medium text-sm">数据源管理</span>}
           </button>
         </nav>
       </div>
@@ -304,74 +342,152 @@ function Schema() {
         </div>
       ) : (
         <div className="flex-1 flex">
-          <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
-            <div className="p-4 border-b border-gray-200">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-600">表列表</span>
-                <span className="text-sm text-gray-400">{filteredTables.length} / {schema.length}</span>
-              </div>
-              <input
-                type="text"
-                placeholder="搜索表名或注释..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
+          {/* 表列表 */}
+          <div className={`${tableListCollapsed ? 'w-14' : 'w-80'} bg-gradient-to-b from-white to-slate-50 border-r border-slate-200 flex flex-col transition-all duration-300 shadow-sm`}>
+            <div className="p-3 border-b border-slate-200 flex items-center justify-between bg-white">
+              {!tableListCollapsed && (
+                <div className="flex-1">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                      表列表
+                    </span>
+                    <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredTables.length} / {schema.length}</span>
+                  </div>
+                  <div className="relative">
+                    <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <input
+                      type="text"
+                      placeholder="搜索表名或注释..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 focus:bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+              <button 
+                onClick={toggleTableList} 
+                className="p-1.5 hover:bg-slate-100 rounded-full transition-all duration-200 text-slate-500 hover:text-slate-700 hover:shadow-md ml-1"
+                title={tableListCollapsed ? '展开表列表' : '收起表列表'}
+              >
+                {tableListCollapsed ? (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+                  </svg>
+                )}
+              </button>
             </div>
             
-            <div className="flex-1 overflow-y-auto">
-              {schemaLoading ? (
-                <div className="p-4 text-center text-gray-500">加载中...</div>
-              ) : schemaError ? (
-                <div className="p-4 text-center text-red-500">{schemaError}</div>
-              ) : filteredTables.length === 0 ? (
-                <div className="p-4 text-center text-gray-500">没有匹配的表</div>
-              ) : (
-                <div className="divide-y divide-gray-200">
-                  {filteredTables.map((table) => {
-                    const isOpen = openTabs.some(tab => tab.tableName === table.tableName);
-                    return (
-                      <div
-                        key={table.tableName}
-                        onClick={() => openTable(table)}
-                        className={`px-4 py-3 cursor-pointer ${isOpen ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'}`}
-                      >
-                        <div className="font-mono text-sm">{table.tableName}</div>
-                        {table.comments && (
-                          <div className="text-xs text-gray-500">{table.comments}</div>
-                        )}
+            <div className="flex-1 overflow-y-auto p-2">
+              {!tableListCollapsed && (
+                <>
+                  {schemaLoading ? (
+                    <div className="p-6 text-center text-slate-400">
+                      <div className="animate-pulse">
+                        <svg className="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        加载中...
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  ) : schemaError ? (
+                    <div className="p-6 text-center text-red-400 bg-red-50 rounded-lg border border-red-100">
+                      <svg className="w-8 h-8 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {schemaError}
+                    </div>
+                  ) : filteredTables.length === 0 ? (
+                    <div className="p-6 text-center text-slate-400">
+                      <svg className="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      没有匹配的表
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {filteredTables.map((table) => {
+                        const isOpen = openTabs.some(tab => tab.tableName === table.tableName);
+                        return (
+                          <div
+                            key={table.tableName}
+                            onClick={() => openTable(table)}
+                            className={`px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-200 group ${
+                              isOpen 
+                                ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 shadow-sm' 
+                                : 'hover:bg-slate-100 border border-transparent hover:border-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-0.5">
+                              <span className={`font-mono text-xs font-medium ${isOpen ? 'text-blue-700' : 'text-slate-700'}`}>
+                                {table.tableName}
+                              </span>
+                              {isOpen && (
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                </span>
+                              )}
+                            </div>
+                            {table.comments && (
+                              <div className={`text-xs ${isOpen ? 'text-blue-500' : 'text-slate-400'} line-clamp-1`}>
+                                {table.comments}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
 
-          <div className="flex-1 bg-gray-50 flex flex-col overflow-hidden">
+          <div className="flex-1 bg-gradient-to-br from-slate-50 via-white to-slate-50 flex flex-col overflow-hidden">
             {openTabs.length === 0 ? (
-              <div className="flex-1 flex items-center justify-center text-gray-500">
-                点击左侧表格打开表详情
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center">
+                  <div className="w-20 h-20 bg-gradient-to-br from-blue-100 to-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <svg className="w-10 h-10 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-700 mb-1">选择一个表开始</h3>
+                  <p className="text-slate-400 text-sm">点击左侧表格查看表详情</p>
+                </div>
               </div>
             ) : (
               <div className="flex-1 flex flex-col overflow-hidden">
                 {/* 标签页栏 */}
-                <div className="bg-white border-b border-gray-200 flex items-center overflow-x-auto">
+                <div className="bg-white border-b border-slate-200 flex items-center overflow-x-auto shadow-sm">
                   {openTabs.map((tab) => (
                     <div
                       key={tab.tableName}
-                      className={`flex items-center px-4 py-2 border-r border-gray-200 cursor-pointer min-w-max ${activeTabKey === tab.tableName ? 'bg-blue-50 border-b-2 border-blue-500' : 'hover:bg-gray-50'}`}
+                      className={`flex items-center px-4 py-3 cursor-pointer min-w-max transition-all duration-200 group border-r border-slate-100 last:border-r-0 ${
+                        activeTabKey === tab.tableName 
+                          ? 'bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 border-b-2 border-blue-500' 
+                          : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+                      }`}
                       onClick={() => setActiveTabKey(tab.tableName)}
                     >
-                      <span className="text-sm font-medium mr-2">{tab.tableInfo.comments || tab.tableName}</span>
+                      <span className="text-sm font-medium mr-2.5">{tab.tableInfo.comments || tab.tableName}</span>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           closeTab(tab.tableName);
                         }}
-                        className="text-gray-400 hover:text-gray-600 text-sm"
+                        className={`opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-0.5 rounded-full hover:bg-slate-200 ${activeTabKey === tab.tableName ? 'opacity-100 hover:bg-blue-200' : ''}`}
                       >
-                        ×
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
                       </button>
                     </div>
                   ))}
@@ -386,45 +502,79 @@ function Schema() {
                     <div className="flex-1 flex flex-col overflow-hidden p-6">
                       <div className="flex items-center justify-between mb-6">
                         <div>
-                          <h2 className="text-xl font-bold">{activeTable.tableInfo.tableName}</h2>
+                          <div className="flex items-center gap-2 mb-1">
+                            <h2 className="text-xl font-bold text-slate-800">{activeTable.tableInfo.tableName}</h2>
+                            <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-xs rounded-full border border-slate-200">
+                              {activeTable.tableInfo.columns.length} 列
+                            </span>
+                          </div>
                           {activeTable.tableInfo.comments && (
-                            <p className="text-gray-500">{activeTable.tableInfo.comments}</p>
+                            <p className="text-slate-500 text-sm">{activeTable.tableInfo.comments}</p>
                           )}
                         </div>
-                        <select
-                          value={activeDataSource?.id || ''}
-                          onChange={(e) => handleDataSourceChange(e.target.value)}
-                          className="border border-gray-300 rounded-lg px-4 py-2"
-                        >
-                          <option value="">选择数据源</option>
-                          {dataSources.map((ds) => (
-                            <option key={ds.id} value={ds.id}>
-                              {ds.name} ({ds.type})
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex items-center gap-3">
+                          <select
+                            value={activeDataSource?.id || ''}
+                            onChange={(e) => handleDataSourceChange(e.target.value)}
+                            className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 shadow-sm"
+                          >
+                            <option value="">选择数据源</option>
+                            {dataSources.map((ds) => (
+                              <option key={ds.id} value={ds.id}>
+                                {ds.name} ({ds.type})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
 
-                      <div className="flex space-x-4 border-b border-gray-200 pb-4 mb-4">
+                      <div className="flex space-x-1 mb-6 p-1 bg-slate-100 rounded-xl">
                         <button
                           onClick={() => setActiveSubTab('columns')}
-                          className={`pb-2 border-b-2 font-medium ${activeSubTab === 'columns' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 ${
+                            activeSubTab === 'columns' 
+                              ? 'bg-white text-blue-600 shadow-sm' 
+                              : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200'
+                          }`}
                         >
-                          列信息 ({getTableColumns(activeTable.tableInfo).length})
+                          <span className="flex items-center gap-1.5">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                            </svg>
+                            列信息 ({getTableColumns(activeTable.tableInfo).length})
+                          </span>
                         </button>
                         {activeTable.tableInfo.indexes.length > 0 && (
                           <button
                             onClick={() => setActiveSubTab('indexes')}
-                            className={`pb-2 border-b-2 font-medium ${activeSubTab === 'indexes' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                            className={`px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 ${
+                              activeSubTab === 'indexes' 
+                                ? 'bg-white text-blue-600 shadow-sm' 
+                                : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200'
+                            }`}
                           >
-                            索引信息 ({activeTable.tableInfo.indexes.length})
+                            <span className="flex items-center gap-1.5">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                              </svg>
+                              索引信息 ({activeTable.tableInfo.indexes.length})
+                            </span>
                           </button>
                         )}
                         <button
                           onClick={() => setActiveSubTab('query')}
-                          className={`pb-2 border-b-2 font-medium ${activeSubTab === 'query' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 ${
+                            activeSubTab === 'query' 
+                              ? 'bg-white text-blue-600 shadow-sm' 
+                              : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200'
+                          }`}
                         >
-                          数据查询
+                          <span className="flex items-center gap-1.5">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                            </svg>
+                            数据查询
+                          </span>
                         </button>
                       </div>
 
