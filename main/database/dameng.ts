@@ -1,5 +1,10 @@
 import { SchemaProgress, ProgressCallback } from './oracle';
 
+function escapeOracleRegex(pattern: string): string {
+  const specialChars = /([$()|\\])/g;
+  return pattern.replace(specialChars, '\\$1');
+}
+
 export interface TableColumn {
   columnName: string;
   dataType: string;
@@ -50,7 +55,8 @@ export async function testDamengConnection(params: DamengConnectionParams): Prom
 
 export async function getDamengTables(
   params: DamengConnectionParams,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  tableNamePattern?: string
 ): Promise<TableInfo[]> {
   const Connection = require('dmdb');
   const conn = new Connection({
@@ -68,12 +74,34 @@ export async function getDamengTables(
   };
 
   try {
-    reportProgress(0, 0, '正在获取表列表...', 'loading');
-    const tablesResult = conn.execute(`
+    console.log('tableNamePattern (in getDamengTables):', tableNamePattern);
+    const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
+    
+    let filterDesc = '(all tables)';
+    if (hasTableNamePattern) {
+      filterDesc = `pattern: ${tableNamePattern}`;
+    }
+    
+    console.log(`Fetching tables: ${filterDesc}`);
+    reportProgress(0, 0, `正在获取表列表... (${filterDesc})`, 'loading');
+    
+    let query = `
       SELECT TABLE_NAME
       FROM USER_TABLES
-      ORDER BY TABLE_NAME
-    `);
+    `;
+    
+    if (hasTableNamePattern) {
+      try {
+        const regex = new RegExp(tableNamePattern, 'i');
+        query += ` WHERE REGEXP_LIKE(TABLE_NAME, '${escapeOracleRegex(tableNamePattern)}', 'i')`;
+      } catch {
+        console.log('Invalid regex pattern, skipping table name filter');
+      }
+    }
+    
+    query += ' ORDER BY TABLE_NAME';
+    
+    const tablesResult = conn.execute(query);
 
     const tables: TableInfo[] = [];
     const tablesData = tablesResult.rows || [];

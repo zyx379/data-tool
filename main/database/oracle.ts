@@ -73,10 +73,16 @@ export interface SchemaProgress {
 
 export type ProgressCallback = (progress: SchemaProgress) => void;
 
+function escapeOracleRegex(pattern: string): string {
+  const specialChars = /([$()|\\])/g;
+  return pattern.replace(specialChars, '\\$1');
+}
+
 export async function getOracleTables(
   params: OracleConnectionParams,
   onProgress?: ProgressCallback,
-  ownerFilter?: string
+  ownerFilter?: string,
+  tableNamePattern?: string
 ): Promise<TableInfo[]> {
   let connection: oracledb.Connection | null = null;
   const schema = params.schema || params.username.toUpperCase();
@@ -99,10 +105,22 @@ export async function getOracleTables(
     console.log('Connecting with schema:', schema);
     console.log('Username:', params.username);
     console.log('ownerFilter (in getOracleTables):', ownerFilter);
+    console.log('tableNamePattern (in getOracleTables):', tableNamePattern);
 
-    const isFiltered = ownerFilter && ownerFilter.trim();
-    console.log(`Fetching tables ${isFiltered ? `for owner: ${ownerFilter}` : '(all owners)...'}`);
-    reportProgress(0, 0, isFiltered ? `正在获取表空间 ${ownerFilter} 的表...` : '正在获取表列表...', 'loading');
+    const hasOwnerFilter = ownerFilter && ownerFilter.trim();
+    const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
+    
+    let filterDesc = '(all tables)';
+    if (hasOwnerFilter && hasTableNamePattern) {
+      filterDesc = `owner: ${ownerFilter}, pattern: ${tableNamePattern}`;
+    } else if (hasOwnerFilter) {
+      filterDesc = `owner: ${ownerFilter}`;
+    } else if (hasTableNamePattern) {
+      filterDesc = `pattern: ${tableNamePattern}`;
+    }
+    
+    console.log(`Fetching tables: ${filterDesc}`);
+    reportProgress(0, 0, `正在获取表列表... (${filterDesc})`, 'loading');
     
     let query = `
       SELECT owner, table_name, NVL(comments, ' ') as table_comments
@@ -110,9 +128,24 @@ export async function getOracleTables(
       WHERE table_type = 'TABLE'
     `;
     
-    if (isFiltered) {
+    if (hasOwnerFilter) {
       query += ` AND owner = '${ownerFilter.toUpperCase()}'`;
     }
+    
+    if (hasTableNamePattern) {
+      try {
+        const regex = new RegExp(tableNamePattern, 'i');
+        const escapedPattern = escapeOracleRegex(tableNamePattern);
+        console.log('Original pattern:', tableNamePattern);
+        console.log('Escaped pattern:', escapedPattern);
+        console.log('Adding REGEXP_LIKE condition for both owner and table_name');
+        query += ` AND (REGEXP_LIKE(table_name, '${escapedPattern}', 'i') OR REGEXP_LIKE(owner, '${escapedPattern}', 'i'))`;
+      } catch (e) {
+        console.log('Invalid regex pattern, skipping table name filter:', e);
+      }
+    }
+    
+    console.log('Final query:', query);
     
     query += ' ORDER BY owner, table_name';
     

@@ -17,7 +17,7 @@ export interface ElectronAPI {
   testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
   getQueryHistory: () => Promise<any[]>;
   clearQueryHistory: () => Promise<void>;
-  getSchema: (dataSourceId: string, ownerFilter?: string) => Promise<any[]>;
+  getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string) => Promise<any[]>;
   executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
   onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
 }
@@ -32,7 +32,7 @@ const api: ElectronAPI = {
   testConnection: (ds) => ipcRenderer.invoke('db:testConnection', ds),
   getQueryHistory: () => ipcRenderer.invoke('db:getQueryHistory'),
   clearQueryHistory: () => ipcRenderer.invoke('db:clearQueryHistory'),
-  getSchema: (dataSourceId, ownerFilter) => ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter),
+  getSchema: (dataSourceId, ownerFilter, tableNamePattern) => ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern),
   executeQuery: (dataSourceId, sql) => ipcRenderer.invoke('db:executeQuery', dataSourceId, sql),
   onSchemaProgress: (callback) => {
     const handler = (_: any, progress: SchemaProgress) => callback(progress);

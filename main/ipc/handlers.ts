@@ -148,15 +148,18 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string) => {
+  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string) => {
     try {
       console.log('=== db:getSchema called ===');
       console.log('dataSourceId:', dataSourceId);
       console.log('ownerFilter (received):', ownerFilter);
+      console.log('tableNamePattern (received):', tableNamePattern);
       const ds = getDataSourceById(dataSourceId);
       if (!ds) {
         throw new Error('数据源不存在');
       }
+      console.log('DataSource type:', ds.type);
+      console.log('DataSource schema:', ds.schema);
 
       const sendProgress = (progress: any) => {
         event.sender.send('schema:progress', progress);
@@ -172,7 +175,8 @@ export function registerIpcHandlers() {
           password: ds.password,
           schema: ds.schema,
         };
-        const tables = await getOracleTables(params, sendProgress, ownerFilter);
+        console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern });
+        const tables = await getOracleTables(params, sendProgress, ownerFilter, tableNamePattern);
         console.log(`Got ${tables.length} tables for Oracle`);
         return tables;
       } else if (ds.type === 'dameng') {
@@ -183,7 +187,8 @@ export function registerIpcHandlers() {
           username: ds.username,
           password: ds.password,
         };
-        const tables = await getDamengTables(params, sendProgress);
+        console.log('Calling getDamengTables with tableNamePattern:', tableNamePattern);
+        const tables = await getDamengTables(params, sendProgress, tableNamePattern);
         console.log(`Got ${tables.length} tables for Dameng`);
         return tables;
       }

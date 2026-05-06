@@ -109,7 +109,7 @@ declare global {
       testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
       getQueryHistory: () => Promise<any[]>;
       clearQueryHistory: () => Promise<void>;
-      getSchema: (dataSourceId: string) => Promise<TableInfo[]>;
+      getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string) => Promise<TableInfo[]>;
       executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
       onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
     };
@@ -181,35 +181,27 @@ export const useDataSourceStore = create<DataSourceStore>()(
           const { cachedSchema, schemaFilterPattern } = get();
 
           let ownerFilter: string | undefined;
+          let tableNamePattern: string | undefined;
+          
           if (schemaFilterPattern) {
             console.log('schemaFilterPattern:', schemaFilterPattern);
-            const ownerMatch = schemaFilterPattern.match(/^([A-Za-z0-9_]+)\./);
+            const ownerMatch = schemaFilterPattern.match(/^([A-Za-z0-9_]+)\.(.+)$/);
             console.log('ownerMatch:', ownerMatch);
             if (ownerMatch) {
               ownerFilter = ownerMatch[1].toUpperCase();
+              tableNamePattern = ownerMatch[2];
               console.log('ownerFilter set to:', ownerFilter);
+              console.log('tableNamePattern set to:', tableNamePattern);
+            } else {
+              tableNamePattern = schemaFilterPattern;
+              console.log('tableNamePattern set to:', tableNamePattern);
             }
           }
 
-          if (useCache && cachedSchema[dataSourceId] && !ownerFilter) {
+          if (useCache && cachedSchema[dataSourceId] && !ownerFilter && !tableNamePattern) {
             console.log('Using cached schema for data source:', dataSourceId);
-            let tables = cachedSchema[dataSourceId].tables;
-            if (schemaFilterPattern) {
-              try {
-                const regex = new RegExp(schemaFilterPattern);
-                tables = tables.filter(t => {
-                  if (regex.test(t.tableName)) {
-                    return true;
-                  }
-                  const tableNameOnly = t.tableName.split('.').pop() || t.tableName;
-                  return regex.test(tableNameOnly);
-                });
-              } catch (e) {
-                // invalid regex, ignore filter
-              }
-            }
             set({
-              schema: tables,
+              schema: cachedSchema[dataSourceId].tables,
               schemaLoading: false,
               abortController: null,
               lastSchemaUpdate: new Date(cachedSchema[dataSourceId].updatedAt),
@@ -217,9 +209,15 @@ export const useDataSourceStore = create<DataSourceStore>()(
             return;
           }
 
-          console.log('Calling getSchema with ownerFilter:', ownerFilter);
-          const schema = await window.electronAPI.getSchema(dataSourceId, ownerFilter);
-          console.log('Schema received, length:', schema.length);
+          console.log('=== Calling getSchema ===');
+          console.log('dataSourceId:', dataSourceId);
+          console.log('ownerFilter:', ownerFilter);
+          console.log('tableNamePattern:', tableNamePattern);
+          console.log('electronAPI available:', !!window.electronAPI);
+          console.log('getSchema function:', typeof window.electronAPI?.getSchema);
+          const schema = await window.electronAPI.getSchema(dataSourceId, ownerFilter, tableNamePattern);
+          console.log('=== Schema received ===');
+          console.log('Schema length:', schema.length);
 
           if (controller.signal.aborted) {
             return;
