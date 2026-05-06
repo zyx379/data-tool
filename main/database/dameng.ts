@@ -26,6 +26,7 @@ export interface TableInfo {
   comments: string;
   columns: TableColumn[];
   indexes: TableIndex[];
+  owner?: string;
 }
 
 export interface DamengConnectionParams {
@@ -192,6 +193,7 @@ export async function getDamengTables(
         comments: tableComments as string,
         columns,
         indexes,
+        owner: params.schema.toUpperCase(),
       });
     }
 

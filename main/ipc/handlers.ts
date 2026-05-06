@@ -10,6 +10,11 @@ import {
   getQueryHistory,
   addQueryHistory,
   clearQueryHistory,
+  getSchemaCache,
+  setSchemaCache,
+  clearSchemaCache,
+  cleanOldSchemaCache,
+  SCHEMA_CACHE_VERSION,
 } from '../database/sqlite';
 import { getOracleTables, executeOracleQuery, OracleConnectionParams } from '../database/oracle';
 import { getDamengTables, executeDamengQuery, DamengConnectionParams } from '../database/dameng';
@@ -148,12 +153,14 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string) => {
+  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache: boolean = true) => {
     try {
       console.log('=== db:getSchema called ===');
       console.log('dataSourceId:', dataSourceId);
       console.log('ownerFilter (received):', ownerFilter);
       console.log('tableNamePattern (received):', tableNamePattern);
+      console.log('useCache:', useCache);
+      
       const ds = getDataSourceById(dataSourceId);
       if (!ds) {
         throw new Error('数据源不存在');
@@ -161,9 +168,30 @@ export function registerIpcHandlers() {
       console.log('DataSource type:', ds.type);
       console.log('DataSource schema:', ds.schema);
 
+      const cacheKey = `${ownerFilter || ''}:${tableNamePattern || ''}`;
+      
+      if (useCache) {
+        const cached = getSchemaCache(dataSourceId, cacheKey);
+        if (cached) {
+          const cacheAgeMs = Date.now() - new Date(cached.cachedAt).getTime();
+          const cacheAgeHours = cacheAgeMs / (1000 * 60 * 60);
+          
+          if (cacheAgeHours < 24) {
+            console.log(`Using cached schema (age: ${cacheAgeHours.toFixed(2)} hours)`);
+            return cached.schemaData;
+          } else {
+            console.log(`Cache expired (age: ${cacheAgeHours.toFixed(2)} hours), fetching fresh`);
+          }
+        } else {
+          console.log('No cached schema found');
+        }
+      }
+
       const sendProgress = (progress: any) => {
         event.sender.send('schema:progress', progress);
       };
+
+      let tables: any[];
 
       if (ds.type === 'oracle') {
         const params: OracleConnectionParams = {
@@ -176,9 +204,8 @@ export function registerIpcHandlers() {
           schema: ds.schema,
         };
         console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern });
-        const tables = await getOracleTables(params, sendProgress, ownerFilter, tableNamePattern);
+        tables = await getOracleTables(params, sendProgress, ownerFilter, tableNamePattern);
         console.log(`Got ${tables.length} tables for Oracle`);
-        return tables;
       } else if (ds.type === 'dameng') {
         const params: DamengConnectionParams = {
           host: ds.host,
@@ -188,11 +215,19 @@ export function registerIpcHandlers() {
           password: ds.password,
         };
         console.log('Calling getDamengTables with tableNamePattern:', tableNamePattern);
-        const tables = await getDamengTables(params, sendProgress, tableNamePattern);
+        tables = await getDamengTables(params, sendProgress, tableNamePattern);
         console.log(`Got ${tables.length} tables for Dameng`);
-        return tables;
+      } else {
+        throw new Error('不支持的数据库类型');
       }
-      throw new Error('不支持的数据库类型');
+
+      if (useCache && tables.length > 0) {
+        console.log('Caching schema...');
+        setSchemaCache(dataSourceId, tables, cacheKey);
+        cleanOldSchemaCache(7);
+      }
+
+      return tables;
     } catch (error) {
       console.error('Error getting schema:', error);
       throw error;

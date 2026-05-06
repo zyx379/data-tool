@@ -83,7 +83,9 @@ interface DataSourceStore {
   testConnection: (ds: DataSource) => Promise<{ success: boolean; message: string }>;
   loadSchema: (dataSourceId: string, useCache?: boolean) => Promise<void>;
   refreshSchema: () => Promise<void>;
+  refreshSchemaWithMerge: () => Promise<void>;
   cancelSchemaLoad: () => void;
+  removeTable: (tableName: string) => void;
   setSchemaFilterPattern: (pattern: string) => void;
   addSchemaFilterHistory: (pattern: string) => void;
   setSchemaProgress: (progress: SchemaProgress | null) => void;
@@ -173,7 +175,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
         return await window.electronAPI.testConnection(ds);
       },
 
-      loadSchema: async (dataSourceId, useCache = true) => {
+      loadSchema: async (dataSourceId, useCache = true, mergeWithExisting = false) => {
         const controller = new AbortController();
         set({ schemaLoading: true, schemaError: null, abortController: controller });
 
@@ -239,19 +241,30 @@ export const useDataSourceStore = create<DataSourceStore>()(
             }
           }
 
-          set((state) => ({
-            schema: filteredSchema,
-            schemaLoading: false,
-            abortController: null,
-            lastSchemaUpdate: new Date(),
-            cachedSchema: {
-              ...state.cachedSchema,
-              [dataSourceId]: {
-                tables: schema,
-                updatedAt: new Date().toISOString(),
+          set((state) => {
+            let mergedTables = filteredSchema;
+            
+            if (mergeWithExisting && state.schema.length > 0) {
+              const existingTableNames = new Set(state.schema.map(t => t.tableName));
+              const newTables = filteredSchema.filter(t => !existingTableNames.has(t.tableName));
+              mergedTables = [...state.schema, ...newTables];
+              console.log(`Merged schema: ${state.schema.length} existing + ${newTables.length} new = ${mergedTables.length} total`);
+            }
+
+            return {
+              schema: mergedTables,
+              schemaLoading: false,
+              abortController: null,
+              lastSchemaUpdate: new Date(),
+              cachedSchema: {
+                ...state.cachedSchema,
+                [dataSourceId]: {
+                  tables: mergedTables,
+                  updatedAt: new Date().toISOString(),
+                },
               },
-            },
-          }));
+            };
+          });
         } catch (error) {
           if (controller.signal.aborted) {
             set({ schemaLoading: false, abortController: null });
@@ -262,10 +275,23 @@ export const useDataSourceStore = create<DataSourceStore>()(
         }
       },
 
+      removeTable: (tableName: string) => {
+        set((state) => ({
+          schema: state.schema.filter(t => t.tableName !== tableName),
+        }));
+      },
+
       refreshSchema: async () => {
         const { activeDataSource } = get();
         if (activeDataSource?.id) {
           await get().loadSchema(activeDataSource.id, false);
+        }
+      },
+
+      refreshSchemaWithMerge: async () => {
+        const { activeDataSource } = get();
+        if (activeDataSource?.id) {
+          await get().loadSchema(activeDataSource.id, false, true);
         }
       },
 

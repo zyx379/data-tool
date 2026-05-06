@@ -138,6 +138,7 @@ async function getDamengTables(params, onProgress, tableNamePattern) {
                 comments: tableComments,
                 columns,
                 indexes,
+                owner: params.schema.toUpperCase(),
             });
         }
         reportProgress(totalTables, totalTables, `加载完成 (${tables.length} 个表)`, 'complete');

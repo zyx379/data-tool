@@ -1,6 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import DataSources from './DataSources';
 import { useDataSourceStore, TableInfo, TableColumn } from '../stores/dataSourceStore';
+
+interface TablesByOwner {
+  [owner: string]: TableInfo[];
+}
 
 interface QueryCondition {
   columnName: string;
@@ -30,6 +34,44 @@ function Schema() {
   const [queryResults, setQueryResults] = useState<Record<string, { columns: string[]; rows: any[][] } | null>>({});
   const [isExecuting, setIsExecuting] = useState(false);
   const [showColumnNamesInChinese, setShowColumnNamesInChinese] = useState(false);
+  const [expandedOwners, setExpandedOwners] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tableName: string } | null>(null);
+  const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false);
+
+  const toggleOwner = (owner: string) => {
+    setExpandedOwners(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(owner)) {
+        newSet.delete(owner);
+      } else {
+        newSet.add(owner);
+      }
+      return newSet;
+    });
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, tableName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, tableName });
+  };
+
+  const handleDeleteTable = () => {
+    if (contextMenu) {
+      removeTable(contextMenu.tableName);
+      closeContextMenu();
+    }
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu(null);
+  };
+
+  useEffect(() => {
+    const handleClick = () => closeContextMenu();
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
 
   const {
     dataSources,
@@ -40,6 +82,7 @@ function Schema() {
     loadDataSources,
     setActiveDataSource,
     refreshSchema,
+    refreshSchemaWithMerge,
     cancelSchemaLoad,
     schemaFilterPattern,
     schemaFilterHistory,
@@ -56,6 +99,7 @@ function Schema() {
     tableListCollapsed,
     toggleSidebar,
     toggleTableList,
+    removeTable,
   } = useDataSourceStore();
 
   useEffect(() => {
@@ -468,36 +512,92 @@ function Schema() {
                     </div>
                   ) : (
                     <div className="space-y-1.5">
-                      {filteredTables.map((table) => {
-                        const isOpen = openTabs.some(tab => tab.tableName === table.tableName);
-                        return (
-                          <div
-                            key={table.tableName}
-                            onClick={() => openTable(table)}
-                            className={`px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-200 group ${
-                              isOpen 
-                                ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 shadow-sm' 
-                                : 'hover:bg-slate-100 border border-transparent hover:border-slate-200'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-0.5">
-                              <span className={`font-mono text-xs font-medium ${isOpen ? 'text-blue-700' : 'text-slate-700'}`}>
-                                {table.tableName}
-                              </span>
-                              {isOpen && (
-                                <span className="flex items-center gap-1.5">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                      {(() => {
+                        const groupedTables = filteredTables.reduce((acc, table) => {
+                          const owner = table.owner || 'UNKNOWN';
+                          if (!acc[owner]) {
+                            acc[owner] = [];
+                          }
+                          acc[owner].push(table);
+                          return acc;
+                        }, {} as TablesByOwner);
+
+                        const owners = Object.keys(groupedTables).sort();
+
+                        return owners.map(owner => {
+                          const tables = groupedTables[owner];
+                          const isExpanded = expandedOwners.has(owner);
+                          const hasOpenTable = tables.some(table => openTabs.some(tab => tab.tableName === table.tableName));
+
+                          return (
+                            <div key={owner} className="mb-2">
+                              <div
+                                onClick={() => toggleOwner(owner)}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all duration-200 ${
+                                  hasOpenTable 
+                                    ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200' 
+                                    : 'hover:bg-slate-100 border border-transparent hover:border-slate-200'
+                                }`}
+                              >
+                                <svg
+                                  className={`w-4 h-4 transition-transform duration-200 ${
+                                    isExpanded ? 'rotate-90 text-blue-500' : 'text-slate-400'
+                                  }`}
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                                <span className={`font-semibold text-sm ${hasOpenTable ? 'text-blue-700' : 'text-slate-700'}`}>
+                                  {owner}
                                 </span>
+                                <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full ml-auto">
+                                  {tables.length}
+                                </span>
+                              </div>
+
+                              {isExpanded && (
+                                <div className="ml-4 mt-1 space-y-1">
+                                  {tables.map(table => {
+                                    const isOpen = openTabs.some(tab => tab.tableName === table.tableName);
+                                    const tableNameOnly = table.tableName.split('.').pop() || table.tableName;
+
+                                    return (
+                                      <div
+                                        key={table.tableName}
+                                        onClick={() => openTable(table)}
+                                        onContextMenu={(e) => handleContextMenu(e, table.tableName)}
+                                        className={`px-3 py-2 rounded-lg cursor-pointer transition-all duration-200 group ${
+                                          isOpen 
+                                            ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 shadow-sm' 
+                                            : 'hover:bg-slate-50 border border-transparent hover:border-slate-200'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between mb-0.5">
+                                          <span className={`font-mono text-xs font-medium ${isOpen ? 'text-blue-700' : 'text-slate-700'}`}>
+                                            {tableNameOnly}
+                                          </span>
+                                          {isOpen && (
+                                            <span className="flex items-center gap-1.5">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                            </span>
+                                          )}
+                                        </div>
+                                        {table.comments && (
+                                          <div className={`text-xs ${isOpen ? 'text-blue-500' : 'text-slate-400'} line-clamp-1`}>
+                                            {table.comments}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </div>
-                            {table.comments && (
-                              <div className={`text-xs ${isOpen ? 'text-blue-500' : 'text-slate-400'} line-clamp-1`}>
-                                {table.comments}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                          );
+                        });
+                      })()}
                     </div>
                   )}
                 </>
@@ -963,16 +1063,99 @@ function Schema() {
               </button>
               <button
                 onClick={() => {
+                  if (schema.length > 0) {
+                    setShowOverwriteConfirm(true);
+                  } else {
+                    if (schemaFilterPattern) {
+                      addSchemaFilterHistory(schemaFilterPattern);
+                    }
+                    refreshSchema();
+                    setShowRefreshModal(false);
+                  }
+                }}
+                disabled={schemaLoading}
+                className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 disabled:opacity-50 transition-colors"
+              >
+                {schemaLoading ? '加载中...' : '覆盖更新'}
+              </button>
+              <button
+                onClick={() => {
                   if (schemaFilterPattern) {
                     addSchemaFilterHistory(schemaFilterPattern);
                   }
-                  refreshSchema();
+                  refreshSchemaWithMerge();
                   setShowRefreshModal(false);
                 }}
                 disabled={schemaLoading}
                 className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
               >
-                {schemaLoading ? '加载中...' : '确定'}
+                {schemaLoading ? '加载中...' : '增量更新'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {contextMenu && (
+        <div
+          className="fixed bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50 min-w-48"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            onClick={handleDeleteTable}
+            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            删除表
+          </button>
+        </div>
+      )}
+
+      {showOverwriteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+            <div className="flex items-center gap-4 p-4 border-b border-slate-200">
+              <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+                <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-700">确认覆盖更新</h3>
+                <p className="text-sm text-slate-500">此操作将替换当前所有表结构</p>
+              </div>
+            </div>
+            <div className="p-4">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <p className="text-sm text-red-700">
+                  <strong>警告：</strong>覆盖更新将清除当前已加载的 {schema.length} 张表，并重新加载新的表结构。已打开的表标签页将保持打开状态，但可能无法正常工作。
+                </p>
+              </div>
+              <p className="mt-3 text-sm text-slate-600">
+                建议使用「增量更新」功能，保留已存在的表结构，只添加新表。
+              </p>
+            </div>
+            <div className="flex justify-end gap-3 p-4 border-t border-slate-200">
+              <button
+                onClick={() => setShowOverwriteConfirm(false)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  if (schemaFilterPattern) {
+                    addSchemaFilterHistory(schemaFilterPattern);
+                  }
+                  refreshSchema();
+                  setShowRefreshModal(false);
+                  setShowOverwriteConfirm(false);
+                }}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                确认覆盖
               </button>
             </div>
           </div>

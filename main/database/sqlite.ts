@@ -91,6 +91,26 @@ export async function initDatabase() {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS schema_cache (
+      id TEXT PRIMARY KEY,
+      dataSourceId TEXT NOT NULL,
+      schemaData TEXT NOT NULL,
+      filterPattern TEXT,
+      cachedAt TEXT NOT NULL,
+      version TEXT NOT NULL,
+      FOREIGN KEY (dataSourceId) REFERENCES data_sources(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_schema_cache_dataSourceId ON schema_cache(dataSourceId)
+  `);
+
+  db.run(`
+    CREATE INDEX IF NOT EXISTS idx_schema_cache_dataSourceId_filter ON schema_cache(dataSourceId, filterPattern)
+  `);
+
   saveDatabase();
   console.log('Database initialized successfully');
 }
@@ -288,5 +308,71 @@ export function addQueryHistory(history: Omit<any, 'id'>) {
 export function clearQueryHistory() {
   const database = getDb();
   database.run('DELETE FROM query_history');
+  saveDatabase();
+}
+
+export const SCHEMA_CACHE_VERSION = 'v2';
+
+export function getSchemaCache(dataSourceId: string, filterPattern?: string): any | undefined {
+  const database = getDb();
+  const stmt = database.prepare(
+    'SELECT * FROM schema_cache WHERE dataSourceId = ? AND filterPattern = ? AND version = ? ORDER BY cachedAt DESC LIMIT 1'
+  );
+  stmt.bind([dataSourceId, filterPattern || null, SCHEMA_CACHE_VERSION]);
+
+  if (stmt.step()) {
+    const row = stmt.get();
+    stmt.free();
+    try {
+      return {
+        id: row[0] as string,
+        dataSourceId: row[1] as string,
+        schemaData: JSON.parse(row[2] as string),
+        filterPattern: row[3] as string | null,
+        cachedAt: row[4] as string,
+        version: row[5] as string,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  stmt.free();
+  return undefined;
+}
+
+export function setSchemaCache(dataSourceId: string, schemaData: any[], filterPattern?: string) {
+  const database = getDb();
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  const schemaJson = JSON.stringify(schemaData);
+
+  database.run(
+    `INSERT INTO schema_cache (id, dataSourceId, schemaData, filterPattern, cachedAt, version)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, dataSourceId, schemaJson, filterPattern || null, now, SCHEMA_CACHE_VERSION]
+  );
+
+  saveDatabase();
+  return { id, cachedAt: now };
+}
+
+export function clearSchemaCache(dataSourceId?: string) {
+  const database = getDb();
+  if (dataSourceId) {
+    database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
+  } else {
+    database.run('DELETE FROM schema_cache');
+  }
+  saveDatabase();
+}
+
+export function cleanOldSchemaCache(keepDays: number = 30) {
+  const database = getDb();
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - keepDays);
+  const cutoffStr = cutoffDate.toISOString();
+
+  database.run('DELETE FROM schema_cache WHERE cachedAt < ? OR version != ?', [cutoffStr, SCHEMA_CACHE_VERSION]);
   saveDatabase();
 }

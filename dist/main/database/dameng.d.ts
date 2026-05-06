@@ -18,6 +18,7 @@ export interface TableInfo {
     comments: string;
     columns: TableColumn[];
     indexes: TableIndex[];
+    owner?: string;
 }
 export interface DamengConnectionParams {
     host: string;
