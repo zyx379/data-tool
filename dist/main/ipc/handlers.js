@@ -173,13 +173,21 @@ function registerIpcHandlers() {
             throw error;
         }
     });
-    electron_1.ipcMain.handle('db:getSchema', async (_, dataSourceId) => {
+    electron_1.ipcMain.handle('db:getSchema', async (event, dataSourceId, ownerFilter, tableNamePattern) => {
         try {
-            console.log('Getting schema for data source:', dataSourceId);
+            console.log('=== db:getSchema called ===');
+            console.log('dataSourceId:', dataSourceId);
+            console.log('ownerFilter (received):', ownerFilter);
+            console.log('tableNamePattern (received):', tableNamePattern);
             const ds = (0, sqlite_1.getDataSourceById)(dataSourceId);
             if (!ds) {
                 throw new Error('数据源不存在');
             }
+            console.log('DataSource type:', ds.type);
+            console.log('DataSource schema:', ds.schema);
+            const sendProgress = (progress) => {
+                event.sender.send('schema:progress', progress);
+            };
             if (ds.type === 'oracle') {
                 const params = {
                     host: ds.host,
@@ -190,7 +198,8 @@ function registerIpcHandlers() {
                     password: ds.password,
                     schema: ds.schema,
                 };
-                const tables = await (0, oracle_1.getOracleTables)(params);
+                console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern });
+                const tables = await (0, oracle_1.getOracleTables)(params, sendProgress, ownerFilter, tableNamePattern);
                 console.log(`Got ${tables.length} tables for Oracle`);
                 return tables;
             }
@@ -202,7 +211,8 @@ function registerIpcHandlers() {
                     username: ds.username,
                     password: ds.password,
                 };
-                const tables = await (0, dameng_1.getDamengTables)(params);
+                console.log('Calling getDamengTables with tableNamePattern:', tableNamePattern);
+                const tables = await (0, dameng_1.getDamengTables)(params, sendProgress, tableNamePattern);
                 console.log(`Got ${tables.length} tables for Dameng`);
                 return tables;
             }

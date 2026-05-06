@@ -11,7 +11,12 @@ const api = {
     testConnection: (ds) => electron_1.ipcRenderer.invoke('db:testConnection', ds),
     getQueryHistory: () => electron_1.ipcRenderer.invoke('db:getQueryHistory'),
     clearQueryHistory: () => electron_1.ipcRenderer.invoke('db:clearQueryHistory'),
-    getSchema: (dataSourceId) => electron_1.ipcRenderer.invoke('db:getSchema', dataSourceId),
+    getSchema: (dataSourceId, ownerFilter, tableNamePattern) => electron_1.ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern),
     executeQuery: (dataSourceId, sql) => electron_1.ipcRenderer.invoke('db:executeQuery', dataSourceId, sql),
+    onSchemaProgress: (callback) => {
+        const handler = (_, progress) => callback(progress);
+        electron_1.ipcRenderer.on('schema:progress', handler);
+        return () => electron_1.ipcRenderer.removeListener('schema:progress', handler);
+    },
 };
 electron_1.contextBridge.exposeInMainWorld('electronAPI', api);

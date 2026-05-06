@@ -3,6 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.testDamengConnection = testDamengConnection;
 exports.getDamengTables = getDamengTables;
 exports.executeDamengQuery = executeDamengQuery;
+function escapeOracleRegex(pattern) {
+    const specialChars = /([$()|\\])/g;
+    return pattern.replace(specialChars, '\\$1');
+}
 async function testDamengConnection(params) {
     try {
         const Connection = require('dmdb');
@@ -20,7 +24,7 @@ async function testDamengConnection(params) {
         return { success: false, message: error.message };
     }
 }
-async function getDamengTables(params) {
+async function getDamengTables(params, onProgress, tableNamePattern) {
     const Connection = require('dmdb');
     const conn = new Connection({
         host: params.host,
@@ -29,15 +33,50 @@ async function getDamengTables(params) {
         dba_password: params.password,
         database: params.schema,
     });
+    const reportProgress = (current, total, currentTable, phase) => {
+        if (onProgress) {
+            onProgress({ current, total, currentTable, phase });
+        }
+    };
     try {
-        const tablesResult = conn.execute(`
+        console.log('tableNamePattern (in getDamengTables):', tableNamePattern);
+        const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
+        let filterDesc = '(all tables)';
+        if (hasTableNamePattern) {
+            filterDesc = `pattern: ${tableNamePattern}`;
+        }
+        console.log(`Fetching tables: ${filterDesc}`);
+        reportProgress(0, 0, `正在获取表列表... (${filterDesc})`, 'loading');
+        let query = `
       SELECT TABLE_NAME
       FROM USER_TABLES
-      ORDER BY TABLE_NAME
-    `);
+    `;
+        if (hasTableNamePattern) {
+            try {
+                const regex = new RegExp(tableNamePattern, 'i');
+                query += ` WHERE REGEXP_LIKE(TABLE_NAME, '${escapeOracleRegex(tableNamePattern)}', 'i')`;
+            }
+            catch {
+                console.log('Invalid regex pattern, skipping table name filter');
+            }
+        }
+        query += ' ORDER BY TABLE_NAME';
+        const tablesResult = conn.execute(query);
         const tables = [];
-        for (const row of tablesResult.rows || []) {
+        const tablesData = tablesResult.rows || [];
+        const totalTables = tablesData.length;
+        if (totalTables === 0) {
+            reportProgress(0, 0, '没有找到表', 'complete');
+            conn.close();
+            return [];
+        }
+        reportProgress(0, totalTables, '开始加载表结构...', 'processing');
+        for (let i = 0; i < tablesData.length; i++) {
+            const row = tablesData[i];
             const tableName = row[0];
+            if (i % 10 === 0 || i === tablesData.length - 1) {
+                reportProgress(i + 1, totalTables, tableName, 'processing');
+            }
             const columnsResult = conn.execute(`
         SELECT
           col.COLUMN_NAME,
@@ -101,10 +140,12 @@ async function getDamengTables(params) {
                 indexes,
             });
         }
+        reportProgress(totalTables, totalTables, `加载完成 (${tables.length} 个表)`, 'complete');
         conn.close();
         return tables;
     }
     catch (error) {
+        reportProgress(0, 0, `错误: ${error.message}`, 'error');
         conn.close();
         throw error;
     }

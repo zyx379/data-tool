@@ -38,9 +38,18 @@ async function testOracleConnection(params) {
         return { success: false, message: error.message };
     }
 }
-async function getOracleTables(params) {
+function escapeOracleRegex(pattern) {
+    const specialChars = /([$()|\\])/g;
+    return pattern.replace(specialChars, '\\$1');
+}
+async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern) {
     let connection = null;
     const schema = params.schema || params.username.toUpperCase();
+    const reportProgress = (current, total, currentTable, phase) => {
+        if (onProgress) {
+            onProgress({ current, total, currentTable, phase });
+        }
+    };
     try {
         const connectionString = buildConnectionString(params);
         connection = await oracledb_1.default.getConnection({
@@ -51,27 +60,65 @@ async function getOracleTables(params) {
         console.log('=== DIAGNOSIS INFO ===');
         console.log('Connecting with schema:', schema);
         console.log('Username:', params.username);
-        console.log('Fetching ALL tables (all owners)...');
-        const tablesResult = await connection.execute(`
+        console.log('ownerFilter (in getOracleTables):', ownerFilter);
+        console.log('tableNamePattern (in getOracleTables):', tableNamePattern);
+        const hasOwnerFilter = ownerFilter && ownerFilter.trim();
+        const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
+        let filterDesc = '(all tables)';
+        if (hasOwnerFilter && hasTableNamePattern) {
+            filterDesc = `owner: ${ownerFilter}, pattern: ${tableNamePattern}`;
+        }
+        else if (hasOwnerFilter) {
+            filterDesc = `owner: ${ownerFilter}`;
+        }
+        else if (hasTableNamePattern) {
+            filterDesc = `pattern: ${tableNamePattern}`;
+        }
+        console.log(`Fetching tables: ${filterDesc}`);
+        reportProgress(0, 0, `正在获取表列表... (${filterDesc})`, 'loading');
+        let query = `
       SELECT owner, table_name, NVL(comments, ' ') as table_comments
       FROM all_tab_comments
       WHERE table_type = 'TABLE'
-      ORDER BY owner, table_name
-    `);
+    `;
+        if (hasOwnerFilter) {
+            query += ` AND owner = '${ownerFilter.toUpperCase()}'`;
+        }
+        if (hasTableNamePattern) {
+            try {
+                const regex = new RegExp(tableNamePattern, 'i');
+                const escapedPattern = escapeOracleRegex(tableNamePattern);
+                console.log('Original pattern:', tableNamePattern);
+                console.log('Escaped pattern:', escapedPattern);
+                console.log('Adding REGEXP_LIKE condition for both owner and table_name');
+                query += ` AND (REGEXP_LIKE(table_name, '${escapedPattern}', 'i') OR REGEXP_LIKE(owner, '${escapedPattern}', 'i'))`;
+            }
+            catch (e) {
+                console.log('Invalid regex pattern, skipping table name filter:', e);
+            }
+        }
+        console.log('Final query:', query);
+        query += ' ORDER BY owner, table_name';
+        const tablesResult = await connection.execute(query);
         console.log(`Total tables found in DB: ${tablesResult.rows ? tablesResult.rows.length : 0}`);
         const tables = [];
         if (!tablesResult.rows) {
             console.log('No rows returned');
+            reportProgress(0, 0, '没有找到表', 'complete');
             return tables;
         }
         const tablesData = tablesResult.rows;
+        const totalTables = tablesData.length;
+        reportProgress(0, totalTables, '开始加载表结构...', 'processing');
         for (let i = 0; i < tablesData.length; i++) {
             const row = tablesData[i];
             const owner = row[0];
             const tableName = row[1];
             const tableComments = row[2];
-            if (i % 100 === 0) {
-                console.log(`Processing table ${i + 1}/${tablesData.length}: ${owner}.${tableName}`);
+            const fullTableName = `${owner}.${tableName}`;
+            if (i % 10 === 0 || i === tablesData.length - 1) {
+                console.log(`Processing table ${i + 1}/${tablesData.length}: ${fullTableName}`);
+                reportProgress(i + 1, totalTables, fullTableName, 'processing');
             }
             const columnsResult = await connection.execute(`
         SELECT
@@ -126,7 +173,7 @@ async function getOracleTables(params) {
                 });
             }
             tables.push({
-                tableName: `${owner}.${tableName}`,
+                tableName: fullTableName,
                 comments: tableComments,
                 columns,
                 indexes,
@@ -134,11 +181,13 @@ async function getOracleTables(params) {
             });
         }
         console.log(`Successfully loaded ${tables.length} tables`);
+        reportProgress(totalTables, totalTables, `加载完成 (${tables.length} 个表)`, 'complete');
         await connection.close();
         return tables;
     }
     catch (error) {
         console.error('Error fetching Oracle tables:', error);
+        reportProgress(0, 0, `错误: ${error.message}`, 'error');
         if (connection) {
             try {
                 await connection.close();

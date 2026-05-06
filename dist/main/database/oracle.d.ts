@@ -32,7 +32,14 @@ export declare function testOracleConnection(params: OracleConnectionParams): Pr
     success: boolean;
     message: string;
 }>;
-export declare function getOracleTables(params: OracleConnectionParams): Promise<TableInfo[]>;
+export interface SchemaProgress {
+    current: number;
+    total: number;
+    currentTable: string;
+    phase: 'loading' | 'processing' | 'complete' | 'error';
+}
+export type ProgressCallback = (progress: SchemaProgress) => void;
+export declare function getOracleTables(params: OracleConnectionParams, onProgress?: ProgressCallback, ownerFilter?: string, tableNamePattern?: string): Promise<TableInfo[]>;
 export declare function executeOracleQuery(params: OracleConnectionParams, sql: string): Promise<{
     columns: string[];
     rows: any[][];
