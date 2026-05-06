@@ -20,6 +20,7 @@ interface OpenTab {
 
 function Schema() {
   const [showDatasources, setShowDatasources] = useState(false);
+  const [showRefreshModal, setShowRefreshModal] = useState(false);
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'columns' | 'indexes' | 'query'>('columns');
@@ -38,7 +39,14 @@ function Schema() {
     schemaError,
     loadDataSources,
     setActiveDataSource,
-    loadSchema,
+    refreshSchema,
+    cancelSchemaLoad,
+    schemaFilterPattern,
+    schemaFilterHistory,
+    setSchemaFilterPattern,
+    addSchemaFilterHistory,
+    schemaProgress,
+    setSchemaProgress,
     toggleFieldUsed,
     getUsedFields,
     setShowOnlyUsedFieldsByTable,
@@ -51,14 +59,17 @@ function Schema() {
   } = useDataSourceStore();
 
   useEffect(() => {
-    loadDataSources();
-  }, [loadDataSources]);
+    if (window.electronAPI?.onSchemaProgress) {
+      const unsubscribe = window.electronAPI.onSchemaProgress((progress) => {
+        setSchemaProgress(progress);
+      });
+      return unsubscribe;
+    }
+  }, [setSchemaProgress]);
 
   useEffect(() => {
-    if (activeDataSource?.id) {
-      loadSchema(activeDataSource.id, true);
-    }
-  }, [activeDataSource, loadSchema]);
+    loadDataSources();
+  }, [loadDataSources]);
 
   const filteredTables = schema.filter((table) => {
     if (!searchTerm) return true;
@@ -352,7 +363,31 @@ function Schema() {
                       <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
                       表列表
                     </span>
-                    <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredTables.length} / {schema.length}</span>
+                    <div className="flex items-center gap-2">
+                      {schemaLoading ? (
+                        <button
+                          onClick={cancelSchemaLoad}
+                          className="p-1 hover:bg-red-100 rounded-full transition-all duration-200 text-red-400 hover:text-red-600"
+                          title="取消加载"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setShowRefreshModal(true)}
+                          disabled={!activeDataSource?.id}
+                          className="p-1 hover:bg-slate-100 rounded-full transition-all duration-200 text-slate-400 hover:text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="加载/刷新表结构"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        </button>
+                      )}
+                      <span className="text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">{filteredTables.length} / {schema.length}</span>
+                    </div>
                   </div>
                   <div className="relative">
                     <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -389,13 +424,33 @@ function Schema() {
               {!tableListCollapsed && (
                 <>
                   {schemaLoading ? (
-                    <div className="p-6 text-center text-slate-400">
-                      <div className="animate-pulse">
-                        <svg className="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="p-4">
+                      <div className="text-center text-slate-500 mb-3">
+                        <svg className="w-6 h-6 mx-auto mb-2 animate-spin text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
-                        加载中...
+                        <p className="text-sm font-medium">{schemaProgress?.phase === 'loading' ? '正在获取表列表...' : '正在加载表结构...'}</p>
                       </div>
+                      {schemaProgress && schemaProgress.total > 0 && (
+                        <div className="mb-2">
+                          <div className="flex justify-between text-xs text-slate-400 mb-1">
+                            <span className="truncate max-w-xs font-mono">{schemaProgress.currentTable}</span>
+                            <span>{schemaProgress.current} / {schemaProgress.total}</span>
+                          </div>
+                          <div className="w-full bg-slate-200 rounded-full h-2">
+                            <div
+                              className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                              style={{ width: `${(schemaProgress.current / schemaProgress.total) * 100}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      )}
+                      <button
+                        onClick={cancelSchemaLoad}
+                        className="w-full mt-2 px-4 py-2 text-sm text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        取消加载
+                      </button>
                     </div>
                   ) : schemaError ? (
                     <div className="p-6 text-center text-red-400 bg-red-50 rounded-lg border border-red-100">
@@ -842,6 +897,84 @@ function Schema() {
                 })()}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {showRefreshModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <h3 className="text-lg font-semibold text-slate-700">加载表结构</h3>
+              <button
+                onClick={() => setShowRefreshModal(false)}
+                className="p-1 hover:bg-slate-100 rounded-full transition-colors"
+              >
+                <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4">
+              <label className="block text-sm font-medium text-slate-600 mb-2">正则过滤表名</label>
+              <input
+                type="text"
+                placeholder="如: ^T_|^ABC (留空加载全部)"
+                value={schemaFilterPattern}
+                onChange={(e) => setSchemaFilterPattern(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
+                autoFocus
+              />
+              {schemaFilterHistory.length > 0 && (
+                <div className="mb-3">
+                  <label className="block text-xs text-slate-500 mb-2">历史记录</label>
+                  <div className="flex flex-wrap gap-2">
+                    {schemaFilterHistory.map((pattern, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-1 px-2 py-1 bg-slate-100 rounded-full text-xs font-mono text-slate-600 cursor-pointer hover:bg-slate-200"
+                        onClick={() => setSchemaFilterPattern(pattern)}
+                      >
+                        <span>{pattern}</span>
+                        <button
+                          className="text-slate-400 hover:text-red-500 ml-1"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newHistory = schemaFilterHistory.filter((_, i) => i !== index);
+                            useDataSourceStore.setState({ schemaFilterHistory: newHistory });
+                          }}
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 p-4 border-t border-slate-200">
+              <button
+                onClick={() => setShowRefreshModal(false)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  if (schemaFilterPattern) {
+                    addSchemaFilterHistory(schemaFilterPattern);
+                  }
+                  refreshSchema();
+                  setShowRefreshModal(false);
+                }}
+                disabled={schemaLoading}
+                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
+              >
+                {schemaLoading ? '加载中...' : '确定'}
+              </button>
+            </div>
           </div>
         </div>
       )}

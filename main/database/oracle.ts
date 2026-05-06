@@ -64,9 +64,28 @@ export async function testOracleConnection(params: OracleConnectionParams): Prom
   }
 }
 
-export async function getOracleTables(params: OracleConnectionParams): Promise<TableInfo[]> {
+export interface SchemaProgress {
+  current: number;
+  total: number;
+  currentTable: string;
+  phase: 'loading' | 'processing' | 'complete' | 'error';
+}
+
+export type ProgressCallback = (progress: SchemaProgress) => void;
+
+export async function getOracleTables(
+  params: OracleConnectionParams,
+  onProgress?: ProgressCallback,
+  ownerFilter?: string
+): Promise<TableInfo[]> {
   let connection: oracledb.Connection | null = null;
   const schema = params.schema || params.username.toUpperCase();
+
+  const reportProgress = (current: number, total: number, currentTable: string, phase: SchemaProgress['phase']) => {
+    if (onProgress) {
+      onProgress({ current, total, currentTable, phase });
+    }
+  };
 
   try {
     const connectionString = buildConnectionString(params);
@@ -79,34 +98,51 @@ export async function getOracleTables(params: OracleConnectionParams): Promise<T
     console.log('=== DIAGNOSIS INFO ===');
     console.log('Connecting with schema:', schema);
     console.log('Username:', params.username);
+    console.log('ownerFilter (in getOracleTables):', ownerFilter);
+
+    const isFiltered = ownerFilter && ownerFilter.trim();
+    console.log(`Fetching tables ${isFiltered ? `for owner: ${ownerFilter}` : '(all owners)...'}`);
+    reportProgress(0, 0, isFiltered ? `正在获取表空间 ${ownerFilter} 的表...` : '正在获取表列表...', 'loading');
     
-    console.log('Fetching ALL tables (all owners)...');
-    const tablesResult = await connection.execute(`
+    let query = `
       SELECT owner, table_name, NVL(comments, ' ') as table_comments
       FROM all_tab_comments
       WHERE table_type = 'TABLE'
-      ORDER BY owner, table_name
-    `);
+    `;
+    
+    if (isFiltered) {
+      query += ` AND owner = '${ownerFilter.toUpperCase()}'`;
+    }
+    
+    query += ' ORDER BY owner, table_name';
+    
+    const tablesResult = await connection.execute(query);
 
     console.log(`Total tables found in DB: ${tablesResult.rows ? tablesResult.rows.length : 0}`);
-    
+
     const tables: TableInfo[] = [];
 
     if (!tablesResult.rows) {
       console.log('No rows returned');
+      reportProgress(0, 0, '没有找到表', 'complete');
       return tables;
     }
 
     const tablesData = tablesResult.rows as any[];
-    
+    const totalTables = tablesData.length;
+
+    reportProgress(0, totalTables, '开始加载表结构...', 'processing');
+
     for (let i = 0; i < tablesData.length; i++) {
       const row = tablesData[i];
       const owner = row[0] as string;
       const tableName = row[1] as string;
       const tableComments = row[2] as string;
+      const fullTableName = `${owner}.${tableName}`;
 
-      if (i % 100 === 0) {
-        console.log(`Processing table ${i + 1}/${tablesData.length}: ${owner}.${tableName}`);
+      if (i % 10 === 0 || i === tablesData.length - 1) {
+        console.log(`Processing table ${i + 1}/${tablesData.length}: ${fullTableName}`);
+        reportProgress(i + 1, totalTables, fullTableName, 'processing');
       }
 
       const columnsResult = await connection.execute(`
@@ -169,7 +205,7 @@ export async function getOracleTables(params: OracleConnectionParams): Promise<T
       }
 
       tables.push({
-        tableName: `${owner}.${tableName}`,
+        tableName: fullTableName,
         comments: tableComments,
         columns,
         indexes,
@@ -178,10 +214,12 @@ export async function getOracleTables(params: OracleConnectionParams): Promise<T
     }
 
     console.log(`Successfully loaded ${tables.length} tables`);
+    reportProgress(totalTables, totalTables, `加载完成 (${tables.length} 个表)`, 'complete');
     await connection.close();
     return tables;
   } catch (error) {
     console.error('Error fetching Oracle tables:', error);
+    reportProgress(0, 0, `错误: ${(error as Error).message}`, 'error');
     if (connection) {
       try {
         await connection.close();

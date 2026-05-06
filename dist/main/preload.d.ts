@@ -1,3 +1,9 @@
+export interface SchemaProgress {
+    current: number;
+    total: number;
+    currentTable: string;
+    phase: 'loading' | 'processing' | 'complete' | 'error';
+}
 export interface ElectronAPI {
     getDataSources: () => Promise<any[]>;
     createDataSource: (ds: any) => Promise<any>;
@@ -11,6 +17,7 @@ export interface ElectronAPI {
     }>;
     getQueryHistory: () => Promise<any[]>;
     clearQueryHistory: () => Promise<void>;
-    getSchema: (dataSourceId: string) => Promise<any[]>;
+    getSchema: (dataSourceId: string, ownerFilter?: string) => Promise<any[]>;
     executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
+    onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
 }

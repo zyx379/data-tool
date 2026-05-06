@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+export interface SchemaProgress {
+  current: number;
+  total: number;
+  currentTable: string;
+  phase: 'loading' | 'processing' | 'complete' | 'error';
+}
+
 export interface ElectronAPI {
   getDataSources: () => Promise<any[]>;
   createDataSource: (ds: any) => Promise<any>;
@@ -10,8 +17,9 @@ export interface ElectronAPI {
   testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
   getQueryHistory: () => Promise<any[]>;
   clearQueryHistory: () => Promise<void>;
-  getSchema: (dataSourceId: string) => Promise<any[]>;
+  getSchema: (dataSourceId: string, ownerFilter?: string) => Promise<any[]>;
   executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
+  onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
 }
 
 const api: ElectronAPI = {
@@ -24,8 +32,13 @@ const api: ElectronAPI = {
   testConnection: (ds) => ipcRenderer.invoke('db:testConnection', ds),
   getQueryHistory: () => ipcRenderer.invoke('db:getQueryHistory'),
   clearQueryHistory: () => ipcRenderer.invoke('db:clearQueryHistory'),
-  getSchema: (dataSourceId) => ipcRenderer.invoke('db:getSchema', dataSourceId),
+  getSchema: (dataSourceId, ownerFilter) => ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter),
   executeQuery: (dataSourceId, sql) => ipcRenderer.invoke('db:executeQuery', dataSourceId, sql),
+  onSchemaProgress: (callback) => {
+    const handler = (_: any, progress: SchemaProgress) => callback(progress);
+    ipcRenderer.on('schema:progress', handler);
+    return () => ipcRenderer.removeListener('schema:progress', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

@@ -148,13 +148,19 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:getSchema', async (_, dataSourceId: string) => {
+  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string) => {
     try {
-      console.log('Getting schema for data source:', dataSourceId);
+      console.log('=== db:getSchema called ===');
+      console.log('dataSourceId:', dataSourceId);
+      console.log('ownerFilter (received):', ownerFilter);
       const ds = getDataSourceById(dataSourceId);
       if (!ds) {
         throw new Error('数据源不存在');
       }
+
+      const sendProgress = (progress: any) => {
+        event.sender.send('schema:progress', progress);
+      };
 
       if (ds.type === 'oracle') {
         const params: OracleConnectionParams = {
@@ -166,7 +172,7 @@ export function registerIpcHandlers() {
           password: ds.password,
           schema: ds.schema,
         };
-        const tables = await getOracleTables(params);
+        const tables = await getOracleTables(params, sendProgress, ownerFilter);
         console.log(`Got ${tables.length} tables for Oracle`);
         return tables;
       } else if (ds.type === 'dameng') {
@@ -177,7 +183,7 @@ export function registerIpcHandlers() {
           username: ds.username,
           password: ds.password,
         };
-        const tables = await getDamengTables(params);
+        const tables = await getDamengTables(params, sendProgress);
         console.log(`Got ${tables.length} tables for Dameng`);
         return tables;
       }

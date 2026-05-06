@@ -1,3 +1,5 @@
+import { SchemaProgress, ProgressCallback } from './oracle';
+
 export interface TableColumn {
   columnName: string;
   dataType: string;
@@ -46,7 +48,10 @@ export async function testDamengConnection(params: DamengConnectionParams): Prom
   }
 }
 
-export async function getDamengTables(params: DamengConnectionParams): Promise<TableInfo[]> {
+export async function getDamengTables(
+  params: DamengConnectionParams,
+  onProgress?: ProgressCallback
+): Promise<TableInfo[]> {
   const Connection = require('dmdb');
   const conn = new Connection({
     host: params.host,
@@ -56,7 +61,14 @@ export async function getDamengTables(params: DamengConnectionParams): Promise<T
     database: params.schema,
   });
 
+  const reportProgress = (current: number, total: number, currentTable: string, phase: SchemaProgress['phase']) => {
+    if (onProgress) {
+      onProgress({ current, total, currentTable, phase });
+    }
+  };
+
   try {
+    reportProgress(0, 0, '正在获取表列表...', 'loading');
     const tablesResult = conn.execute(`
       SELECT TABLE_NAME
       FROM USER_TABLES
@@ -64,9 +76,24 @@ export async function getDamengTables(params: DamengConnectionParams): Promise<T
     `);
 
     const tables: TableInfo[] = [];
+    const tablesData = tablesResult.rows || [];
+    const totalTables = tablesData.length;
 
-    for (const row of tablesResult.rows || []) {
+    if (totalTables === 0) {
+      reportProgress(0, 0, '没有找到表', 'complete');
+      conn.close();
+      return [];
+    }
+
+    reportProgress(0, totalTables, '开始加载表结构...', 'processing');
+
+    for (let i = 0; i < tablesData.length; i++) {
+      const row = tablesData[i];
       const tableName = row[0] as string;
+
+      if (i % 10 === 0 || i === tablesData.length - 1) {
+        reportProgress(i + 1, totalTables, tableName, 'processing');
+      }
 
       const columnsResult = conn.execute(`
         SELECT
@@ -140,9 +167,11 @@ export async function getDamengTables(params: DamengConnectionParams): Promise<T
       });
     }
 
+    reportProgress(totalTables, totalTables, `加载完成 (${tables.length} 个表)`, 'complete');
     conn.close();
     return tables;
   } catch (error) {
+    reportProgress(0, 0, `错误: ${(error as Error).message}`, 'error');
     conn.close();
     throw error;
   }
