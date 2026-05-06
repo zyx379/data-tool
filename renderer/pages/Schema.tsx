@@ -37,6 +37,9 @@ function Schema() {
   const [expandedOwners, setExpandedOwners] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tableName: string } | null>(null);
   const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false);
+  const [showSaveConditionModal, setShowSaveConditionModal] = useState(false);
+  const [savedConditionName, setSavedConditionName] = useState('');
+  const [hasAutoAddedDefaultFields, setHasAutoAddedDefaultFields] = useState(false);
 
   const toggleOwner = (owner: string) => {
     setExpandedOwners(prev => {
@@ -65,6 +68,69 @@ function Schema() {
 
   const closeContextMenu = () => {
     setContextMenu(null);
+  };
+
+  const saveCurrentQueryConditions = () => {
+    if (!activeTabKey || !savedConditionName.trim()) return;
+    
+    const conditions = queryConditions[activeTabKey] || [];
+    if (conditions.length === 0) {
+      alert('没有查询条件可保存');
+      return;
+    }
+
+    const columns = conditions.map(c => c.columnName);
+    const operators = conditions.map(c => c.operator);
+    
+    saveQueryConditionTemplate(savedConditionName.trim(), activeTabKey, columns, operators);
+    setSavedConditionName('');
+    setShowSaveConditionModal(false);
+  };
+
+  const loadQueryConditionTemplate = (template: any) => {
+    if (!activeTabKey) return;
+    
+    const newConditions = template.columns.map((col: string, idx: number) => ({
+      columnName: col,
+      operator: template.operators[idx] || '=',
+      value: ''
+    }));
+    
+    setQueryConditions({
+      ...queryConditions,
+      [activeTabKey]: newConditions
+    });
+  };
+
+  const handleDeleteQueryTemplate = (templateId: string) => {
+    deleteQueryConditionTemplate(templateId);
+  };
+
+  const autoAddDefaultFields = (tableName: string, columns: TableColumn[]) => {
+    const eventNoCol = columns.find(c => c.columnName === 'EVENT_NO');
+    const patientIdCol = columns.find(c => c.columnName === 'PATIENT_ID');
+    
+    const newConditions: QueryCondition[] = [];
+    
+    if (eventNoCol) {
+      newConditions.push({ columnName: 'EVENT_NO', operator: '=', value: '' });
+    }
+    if (patientIdCol) {
+      newConditions.push({ columnName: 'PATIENT_ID', operator: '=', value: '' });
+    }
+    
+    if (newConditions.length > 0) {
+      const currentConditions = queryConditions[tableName] || [];
+      const existingColumns = new Set(currentConditions.map(c => c.columnName));
+      const filteredNewConditions = newConditions.filter(c => !existingColumns.has(c.columnName));
+      
+      if (filteredNewConditions.length > 0) {
+        setQueryConditions({
+          ...queryConditions,
+          [tableName]: [...currentConditions, ...filteredNewConditions]
+        });
+      }
+    }
   };
 
   useEffect(() => {
@@ -101,6 +167,9 @@ function Schema() {
     toggleSidebar,
     toggleTableList,
     removeTable,
+    saveQueryConditionTemplate,
+    deleteQueryConditionTemplate,
+    getQueryConditionTemplatesForTable,
   } = useDataSourceStore();
 
   useEffect(() => {
@@ -121,6 +190,10 @@ function Schema() {
       loadSchema(activeDataSource.id, true);
     }
   }, [activeDataSource, schema.length, loadSchema]);
+
+  useEffect(() => {
+    setHasAutoAddedDefaultFields(false);
+  }, [activeTabKey]);
 
   const filteredTables = schema.filter((table) => {
     if (!searchTerm) return true;
@@ -241,8 +314,16 @@ function Schema() {
   };
 
   const generateSQL = (table: TableInfo, tableName: string) => {
+    const showOnlyUsed = activeDataSource?.id ? getShowOnlyUsedFieldsByTable(`${activeDataSource.id}_${tableName}`) : false;
     const usedColumns = getUsedColumns(table);
-    const selectColumns = usedColumns.length > 0 ? usedColumns.map(c => c.columnName).join(', ') : '*';
+    
+    let selectColumns: string;
+    if (showOnlyUsed) {
+      selectColumns = usedColumns.length > 0 ? usedColumns.map(c => c.columnName).join(', ') : '*';
+    } else {
+      selectColumns = '*';
+    }
+    
     let sql = `SELECT ${selectColumns} FROM ${table.tableName}`;
     
     const conditions = queryConditions[tableName] || [];
@@ -725,7 +806,16 @@ function Schema() {
                           </button>
                         )}
                         <button
-                          onClick={() => setActiveSubTab('query')}
+                          onClick={() => {
+                            setActiveSubTab('query');
+                            if (!hasAutoAddedDefaultFields && activeTabKey) {
+                              const activeTable = openTabs.find(tab => tab.tableName === activeTabKey);
+                              if (activeTable) {
+                                autoAddDefaultFields(activeTabKey, activeTable.tableInfo.columns);
+                                setHasAutoAddedDefaultFields(true);
+                              }
+                            }
+                          }}
                           className={`px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 ${
                             activeSubTab === 'query' 
                               ? 'bg-white text-blue-600 shadow-sm' 
@@ -838,166 +928,227 @@ function Schema() {
                 )}
 
                 {activeSubTab === 'query' && (
-                  <div className="flex-1 overflow-auto space-y-4">
-                    <div className="mb-4 p-3 bg-white rounded-lg flex items-center space-x-4">
-                      <label className="flex items-center space-x-2 cursor-pointer whitespace-nowrap">
-                        <input
-                          type="checkbox"
-                          checked={showColumnNamesInChinese}
-                          onChange={(e) => setShowColumnNamesInChinese(e.target.checked)}
-                          className="rounded"
-                        />
-                        <span className="text-sm">列名显示中文</span>
-                      </label>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-lg shadow">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-semibold">查询条件</h4>
-                        <div className="space-x-2">
-                          {getUsedColumns(activeTable.tableInfo).length > 0 && (
-                            <select
-                              className="border border-gray-300 rounded px-2 py-1 text-sm"
-                              onChange={(e) => {
-                                if (e.target.value) {
-                                  addQueryCondition(activeTable.tableName, e.target.value);
-                                  e.target.value = '';
-                                }
-                              }}
-                            >
-                              <option value="">添加条件</option>
-                              {getUsedColumns(activeTable.tableInfo).map(col => (
-                                <option key={col.columnName} value={col.columnName}>
-                                  {getColumnDisplayName(col)}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </div>
-                      </div>
-                      {(queryConditions[activeTable.tableName] || []).map((condition, index) => {
-                        const column = activeTable.tableInfo.columns.find(c => c.columnName === condition.columnName);
-                        return (
-                          <div key={index} className="flex items-center space-x-2 mb-2">
-                            <span className="font-mono text-sm w-32">{column ? getColumnDisplayName(column) : condition.columnName}</span>
-                            <select
-                              value={condition.operator}
-                              onChange={(e) => updateQueryCondition(activeTable.tableName, index, 'operator', e.target.value)}
-                              className="border border-gray-300 rounded px-2 py-1 text-sm"
-                            >
-                              <option value="=">=</option>
-                              <option value="!=">!=</option>
-                              <option value=">">{'>'}</option>
-                              <option value=">=">{'>='}</option>
-                              <option value="<">{'>'}</option>
-                              <option value="<=">{'>='}</option>
-                              <option value="LIKE">LIKE</option>
-                              <option value="IN">IN</option>
-                              <option value="IS NULL">IS NULL</option>
-                              <option value="IS NOT NULL">IS NOT NULL</option>
-                            </select>
-                            {condition.operator !== 'IS NULL' && condition.operator !== 'IS NOT NULL' && (
+                  <div className="flex-1 flex flex-col overflow-hidden">
+                    <div className="flex-shrink-0 bg-gradient-to-br from-slate-50 to-white border-b border-slate-200 overflow-x-auto">
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center space-x-4">
+                            <label className="flex items-center space-x-2 cursor-pointer whitespace-nowrap">
                               <input
-                                type="text"
-                                value={condition.value}
-                                onChange={(e) => updateQueryCondition(activeTable.tableName, index, 'value', e.target.value)}
-                                placeholder="值"
-                                className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm"
+                                type="checkbox"
+                                checked={showColumnNamesInChinese}
+                                onChange={(e) => setShowColumnNamesInChinese(e.target.checked)}
+                                className="rounded"
                               />
-                            )}
-                            <button onClick={() => removeQueryCondition(activeTable.tableName, index)} className="text-red-500 hover:text-red-700">移除</button>
+                              <span className="text-sm">列名显示中文</span>
+                            </label>
                           </div>
-                        );
-                      })}
-                    </div>
 
-                    <div className="bg-white p-4 rounded-lg shadow">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-semibold">排序条件</h4>
-                        <div className="space-x-2">
-                          {getUsedColumns(activeTable.tableInfo).length > 0 && (
-                            <select
-                              className="border border-gray-300 rounded px-2 py-1 text-sm"
-                              onChange={(e) => {
-                                if (e.target.value) {
-                                  addSortCondition(activeTable.tableName, e.target.value);
-                                  e.target.value = '';
-                                }
-                              }}
+                          {activeTabKey && (() => {
+                            const savedTemplates = getQueryConditionTemplatesForTable(activeTabKey);
+                            return savedTemplates.length > 0 ? (
+                              <div className="flex items-center space-x-2">
+                                <span className="text-xs text-gray-500">已保存条件:</span>
+                                {savedTemplates.map(template => (
+                                  <button
+                                    key={template.id}
+                                    onClick={() => loadQueryConditionTemplate(template)}
+                                    className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded hover:bg-blue-200 transition-colors"
+                                    title={template.columns.join(', ')}
+                                  >
+                                    {template.name}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null;
+                          })()}
+
+                          <div className="flex items-center space-x-2 ml-auto">
+                            <button
+                              onClick={() => executeQuery(activeTable.tableInfo, activeTable.tableName)}
+                              disabled={isExecuting}
+                              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors font-medium text-sm"
                             >
-                              <option value="">添加排序</option>
-                              {getUsedColumns(activeTable.tableInfo).map(col => (
-                                <option key={col.columnName} value={col.columnName}>
-                                  {getColumnDisplayName(col)}
-                                </option>
-                              ))}
-                            </select>
-                          )}
+                              {isExecuting ? '执行中...' : '执行查询'}
+                            </button>
+                            <button onClick={() => exportSQL(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors">导出 SQL</button>
+                            <button onClick={() => exportExcel(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors">导出 Excel</button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-600 whitespace-nowrap">查询条件:</span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {(queryConditions[activeTable.tableName] || []).map((condition, index) => {
+                                const column = activeTable.tableInfo.columns.find(c => c.columnName === condition.columnName);
+                                return (
+                                  <div key={index} className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
+                                    <span className="font-mono text-xs whitespace-nowrap">{column ? getColumnDisplayName(column) : condition.columnName}</span>
+                                    <select
+                                      value={condition.operator}
+                                      onChange={(e) => updateQueryCondition(activeTable.tableName, index, 'operator', e.target.value)}
+                                      className="border-0 text-xs py-0 px-1 bg-transparent"
+                                    >
+                                      <option value="=">=</option>
+                                      <option value="!=">!=</option>
+                                      <option value=">">&gt;</option>
+                                      <option value=">=">&gt;=</option>
+                                      <option value="<">&lt;</option>
+                                      <option value="<=">&lt;=</option>
+                                      <option value="LIKE">LIKE</option>
+                                      <option value="IN">IN</option>
+                                      <option value="IS NULL">NULL</option>
+                                      <option value="IS NOT NULL">NOT NULL</option>
+                                    </select>
+                                    {condition.operator !== 'IS NULL' && condition.operator !== 'IS NOT NULL' && (
+                                      <input
+                                        type="text"
+                                        value={condition.value}
+                                        onChange={(e) => updateQueryCondition(activeTable.tableName, index, 'value', e.target.value)}
+                                        placeholder="值"
+                                        className="border-0 text-xs py-0 px-1 w-24 bg-transparent"
+                                      />
+                                    )}
+                                    <button onClick={() => removeQueryCondition(activeTable.tableName, index)} className="text-red-500 hover:text-red-700 ml-1">
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                              {getUsedColumns(activeTable.tableInfo).length > 0 && (
+                                <select
+                                  className="border border-gray-300 rounded px-2 py-1 text-xs bg-white"
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      addQueryCondition(activeTable.tableName, e.target.value);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                >
+                                  <option value="">+ 添加</option>
+                                  {getUsedColumns(activeTable.tableInfo).map(col => (
+                                    <option key={col.columnName} value={col.columnName}>
+                                      {getColumnDisplayName(col)}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                              {(queryConditions[activeTable.tableName] || []).length > 0 && (
+                                <button
+                                  onClick={() => setShowSaveConditionModal(true)}
+                                  className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded hover:bg-green-200 transition-colors"
+                                >
+                                  保存
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-gray-600 whitespace-nowrap">排序条件:</span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {(sortConditions[activeTable.tableName] || []).map((sort, index) => {
+                                const column = activeTable.tableInfo.columns.find(c => c.columnName === sort.columnName);
+                                return (
+                                  <div key={index} className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
+                                    <span className="font-mono text-xs whitespace-nowrap">{column ? getColumnDisplayName(column) : sort.columnName}</span>
+                                    <select
+                                      value={sort.order}
+                                      onChange={(e) => updateSortCondition(activeTable.tableName, index, 'order', e.target.value)}
+                                      className="border-0 text-xs py-0 px-1 bg-transparent"
+                                    >
+                                      <option value="ASC">↑ ASC</option>
+                                      <option value="DESC">↓ DESC</option>
+                                    </select>
+                                    <button onClick={() => removeSortCondition(activeTable.tableName, index)} className="text-red-500 hover:text-red-700 ml-1">
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                              {getUsedColumns(activeTable.tableInfo).length > 0 && (
+                                <select
+                                  className="border border-gray-300 rounded px-2 py-1 text-xs bg-white"
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      addSortCondition(activeTable.tableName, e.target.value);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                >
+                                  <option value="">+ 添加</option>
+                                  {getUsedColumns(activeTable.tableInfo).map(col => (
+                                    <option key={col.columnName} value={col.columnName}>
+                                      {getColumnDisplayName(col)}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      {(sortConditions[activeTable.tableName] || []).map((sort, index) => {
-                        const column = activeTable.tableInfo.columns.find(c => c.columnName === sort.columnName);
-                        return (
-                          <div key={index} className="flex items-center space-x-2 mb-2">
-                            <span className="font-mono text-sm w-32">{column ? getColumnDisplayName(column) : sort.columnName}</span>
-                            <select
-                              value={sort.order}
-                              onChange={(e) => updateSortCondition(activeTable.tableName, index, 'order', e.target.value)}
-                              className="border border-gray-300 rounded px-2 py-1 text-sm"
-                            >
-                              <option value="ASC">ASC</option>
-                              <option value="DESC">DESC</option>
-                            </select>
-                            <button onClick={() => removeSortCondition(activeTable.tableName, index)} className="text-red-500 hover:text-red-700">移除</button>
+                    </div>
+
+                    <div className="flex-1 overflow-hidden bg-white">
+                      {queryResults[activeTable.tableName] ? (
+                        <div className="h-full flex flex-col">
+                          <div className="p-3 border-b border-slate-200 bg-gray-50 flex-shrink-0">
+                            <h4 className="font-semibold text-gray-700 text-sm">
+                              查询结果 ({queryResults[activeTable.tableName].rows.length} 条)
+                              <span className="text-xs text-gray-400 ml-2 font-normal">
+                                ({queryResults[activeTable.tableName].columns.length} 列)
+                              </span>
+                            </h4>
                           </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="flex items-center space-x-4">
-                      <button
-                        onClick={() => executeQuery(activeTable.tableInfo, activeTable.tableName)}
-                        disabled={isExecuting}
-                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
-                      >
-                        {isExecuting ? '执行中...' : '执行查询'}
-                      </button>
-                      <button onClick={() => exportSQL(activeTable.tableInfo, activeTable.tableName)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">导出 SQL</button>
-                      <button onClick={() => exportExcel(activeTable.tableInfo, activeTable.tableName)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">导出 Excel</button>
-                    </div>
-
-                    {queryResults[activeTable.tableName] && (
-                      <div className="mt-4 bg-white rounded-lg shadow">
-                        <h4 className="font-semibold mb-2 p-4">查询结果 ({queryResults[activeTable.tableName].rows.length} 条)</h4>
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full">
-                            <thead className="bg-gray-50">
-                              <tr>
-                                {queryResults[activeTable.tableName].columns.map((col) => (
-                                  <th key={col} className="px-3 py-2 text-left text-xs font-medium text-gray-600 border">
-                                    {col}
-                                  </th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-200">
-                              {queryResults[activeTable.tableName].rows.slice(0, 100).map((row, index) => (
-                                <tr key={index} className="hover:bg-gray-50">
-                                  {row.map((cell, i) => (
-                                    <td key={i} className="px-3 py-2 text-sm border">
-                                      {cell !== null && cell !== undefined ? String(cell) : '-'}
-                                    </td>
+                          <div className="flex-1 overflow-auto">
+                            <table className="min-w-full">
+                              <thead className="bg-gray-100 sticky top-0 z-10">
+                                <tr>
+                                  {queryResults[activeTable.tableName].columns.map((col) => (
+                                    <th key={col} className="px-3 py-2 text-left text-xs font-medium text-gray-600 border-b border-r border-gray-200 whitespace-nowrap">
+                                      {(activeTable.tableInfo.columns.find(c => c.columnName === col)?.comments && showColumnNamesInChinese) ? activeTable.tableInfo.columns.find(c => c.columnName === col)?.comments : col}
+                                    </th>
                                   ))}
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200">
+                                {queryResults[activeTable.tableName].rows.slice(0, 100).map((row, index) => (
+                                  <tr key={index} className="hover:bg-blue-50 transition-colors">
+                                    {row.map((cell, i) => (
+                                      <td key={i} className="px-3 py-2 text-xs border-b border-r border-gray-100 max-w-xs truncate" title={String(cell ?? '-')}>
+                                        {cell !== null && cell !== undefined ? String(cell) : '-'}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {queryResults[activeTable.tableName].rows.length > 100 && (
+                            <div className="p-2 bg-amber-50 border-t border-amber-200 text-xs text-amber-700 text-center">
+                              显示前100条结果，完整结果请导出Excel
+                            </div>
+                          )}
                         </div>
-                        {queryResults[activeTable.tableName].rows.length > 100 && (
-                          <p className="text-sm text-gray-500 p-4">显示前100条结果，完整结果请导出Excel</p>
-                        )}
-                      </div>
-                    )}
+                      ) : (
+                        <div className="h-full flex items-center justify-center text-gray-400">
+                          <div className="text-center">
+                            <svg className="w-16 h-16 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                            </svg>
+                            <p className="text-sm">点击"执行查询"查看数据</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1098,6 +1249,64 @@ function Schema() {
                 className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
               >
                 {schemaLoading ? '加载中...' : '增量更新'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSaveConditionModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <h3 className="text-lg font-semibold text-slate-700">保存查询条件</h3>
+              <button
+                onClick={() => {
+                  setShowSaveConditionModal(false);
+                  setSavedConditionName('');
+                }}
+                className="p-1 hover:bg-slate-100 rounded-full transition-colors"
+              >
+                <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4">
+              <label className="block text-sm font-medium text-slate-600 mb-2">条件名称</label>
+              <input
+                type="text"
+                placeholder="输入保存的条件名称"
+                value={savedConditionName}
+                onChange={(e) => setSavedConditionName(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                autoFocus
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    saveCurrentQueryConditions();
+                  }
+                }}
+              />
+              <p className="text-xs text-slate-500 mt-2">
+                将保存当前查询条件中的字段列，不包含具体的值
+              </p>
+            </div>
+            <div className="flex justify-end gap-3 p-4 border-t border-slate-200">
+              <button
+                onClick={() => {
+                  setShowSaveConditionModal(false);
+                  setSavedConditionName('');
+                }}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={saveCurrentQueryConditions}
+                disabled={!savedConditionName.trim()}
+                className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                保存
               </button>
             </div>
           </div>

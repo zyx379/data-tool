@@ -50,6 +50,15 @@ export interface SchemaProgress {
   phase: 'loading' | 'processing' | 'complete' | 'error';
 }
 
+interface SavedQueryConditionTemplate {
+  id: string;
+  name: string;
+  tableName: string;
+  columns: string[];
+  operators: string[];
+  createdAt: string;
+}
+
 interface CachedSchema {
   [dataSourceId: string]: {
     tables: TableInfo[];
@@ -75,6 +84,7 @@ interface DataSourceStore {
   schemaFilterHistory: string[];
   abortController: AbortController | null;
   schemaProgress: SchemaProgress | null;
+  savedQueryConditionTemplates: SavedQueryConditionTemplate[];
   loadDataSources: () => Promise<void>;
   createDataSource: (ds: Omit<DataSource, 'id'>) => Promise<DataSource>;
   updateDataSource: (id: string, ds: Partial<DataSource>) => Promise<DataSource>;
@@ -97,6 +107,9 @@ interface DataSourceStore {
   setColumnSearchTerm: (value: string) => void;
   toggleSidebar: () => void;
   toggleTableList: () => void;
+  saveQueryConditionTemplate: (name: string, tableName: string, columns: string[], operators: string[]) => void;
+  deleteQueryConditionTemplate: (id: string) => void;
+  getQueryConditionTemplatesForTable: (tableName: string) => SavedQueryConditionTemplate[];
 }
 
 declare global {
@@ -138,6 +151,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       schemaFilterHistory: [],
       abortController: null,
       schemaProgress: null,
+      savedQueryConditionTemplates: [],
 
       loadDataSources: async () => {
         try {
@@ -343,6 +357,30 @@ export const useDataSourceStore = create<DataSourceStore>()(
       toggleTableList: () => {
         set((state) => ({ tableListCollapsed: !state.tableListCollapsed }));
       },
+
+      saveQueryConditionTemplate: (name, tableName, columns, operators) => {
+        const template: SavedQueryConditionTemplate = {
+          id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          name,
+          tableName,
+          columns,
+          operators,
+          createdAt: new Date().toISOString(),
+        };
+        set((state) => ({
+          savedQueryConditionTemplates: [...state.savedQueryConditionTemplates, template],
+        }));
+      },
+
+      deleteQueryConditionTemplate: (id) => {
+        set((state) => ({
+          savedQueryConditionTemplates: state.savedQueryConditionTemplates.filter(t => t.id !== id),
+        }));
+      },
+
+      getQueryConditionTemplatesForTable: (tableName) => {
+        return get().savedQueryConditionTemplates.filter(t => t.tableName === tableName);
+      },
     }),
     {
       name: 'zoehis-helper-storage',
@@ -356,6 +394,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
         tableListCollapsed: state.tableListCollapsed,
         schemaFilterPattern: state.schemaFilterPattern,
         schemaFilterHistory: state.schemaFilterHistory,
+        savedQueryConditionTemplates: state.savedQueryConditionTemplates,
       }),
     }
   )
