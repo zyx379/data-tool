@@ -316,9 +316,9 @@ export const SCHEMA_CACHE_VERSION = 'v2';
 export function getSchemaCache(dataSourceId: string, filterPattern?: string): any | undefined {
   const database = getDb();
   const stmt = database.prepare(
-    'SELECT * FROM schema_cache WHERE dataSourceId = ? AND filterPattern = ? AND version = ? ORDER BY cachedAt DESC LIMIT 1'
+    'SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) AND version = ? ORDER BY cachedAt DESC LIMIT 1'
   );
-  stmt.bind([dataSourceId, filterPattern || null, SCHEMA_CACHE_VERSION]);
+  const bindFilter = filterPattern || null; stmt.bind([dataSourceId, bindFilter, bindFilter, SCHEMA_CACHE_VERSION]);
 
   if (stmt.step()) {
     const row = stmt.get();
@@ -373,6 +373,6 @@ export function cleanOldSchemaCache(keepDays: number = 30) {
   cutoffDate.setDate(cutoffDate.getDate() - keepDays);
   const cutoffStr = cutoffDate.toISOString();
 
-  database.run('DELETE FROM schema_cache WHERE cachedAt < ? OR version != ?', [cutoffStr, SCHEMA_CACHE_VERSION]);
+  database.run('DELETE FROM schema_cache WHERE cachedAt < ?', [cutoffStr]);
   saveDatabase();
 }

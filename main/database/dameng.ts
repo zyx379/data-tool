@@ -12,6 +12,8 @@ export interface TableColumn {
   dataDefault: string | null;
   comments: string;
   isPrimaryKey: boolean;
+  hasData?: boolean;
+  dataPercentage?: number;
 }
 
 export interface TableIndex {
@@ -188,6 +190,12 @@ export async function getDamengTables(
       `);
       const tableComments = (commentsResult.rows && commentsResult.rows[0] && commentsResult.rows[0][0]) || '';
 
+      const dataResult = checkDamengColumnData(conn, tableName, columns);
+      for (let j = 0; j < columns.length; j++) {
+        columns[j].hasData = dataResult[j]?.hasData || false;
+        columns[j].dataPercentage = dataResult[j]?.percentage || 0;
+      }
+
       tables.push({
         tableName,
         comments: tableComments as string,
@@ -235,5 +243,53 @@ export async function executeDamengQuery(
   } catch (error) {
     conn.close();
     throw error;
+  }
+}
+
+const SAMPLE_SIZE = 1000;
+
+function checkDamengColumnData(
+  conn: any,
+  tableName: string,
+  columns: TableColumn[]
+): { hasData: boolean; percentage: number }[] {
+  try {
+    const columnNames = columns.map(c => `"${c.columnName}"`).join(', ');
+    
+    const sql = `
+      SELECT TOP ${SAMPLE_SIZE} ${columnNames}
+      FROM "${tableName}"
+    `;
+
+    const result = conn.execute(sql);
+    const rows = (result.rows || []) as any[][];
+    const totalRows = rows.length;
+
+    if (totalRows === 0) {
+      return columns.map(() => ({ hasData: false, percentage: 0 }));
+    }
+
+    const columnResults: { hasData: boolean; percentage: number }[] = [];
+
+    for (let colIndex = 0; colIndex < columns.length; colIndex++) {
+      let nonNullCount = 0;
+      
+      for (const row of rows) {
+        if (row[colIndex] !== null && row[colIndex] !== undefined) {
+          nonNullCount++;
+        }
+      }
+
+      const percentage = Math.round((nonNullCount / totalRows) * 100);
+      columnResults.push({
+        hasData: nonNullCount > 0,
+        percentage,
+      });
+    }
+
+    return columnResults;
+  } catch (error) {
+    console.warn(`Error checking column data for ${tableName}:`, error);
+    return columns.map(() => ({ hasData: false, percentage: 0 }));
   }
 }

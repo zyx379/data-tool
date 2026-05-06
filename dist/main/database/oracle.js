@@ -172,6 +172,14 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
                     uniqueness: idxRow[3],
                 });
             }
+            const dataResult = await checkColumnData(connection, owner, tableName, columns);
+            for (let j = 0; j < columns.length; j++) {
+                columns[j].hasData = dataResult[j]?.hasData || false;
+                columns[j].dataPercentage = dataResult[j]?.percentage || 0;
+                if (dataResult[j]?.hasData && !columns[j].isPrimaryKey) {
+                    columns[j].isUsed = true;
+                }
+            }
             tables.push({
                 tableName: fullTableName,
                 comments: tableComments,
@@ -195,6 +203,43 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
             catch { }
         }
         throw error;
+    }
+}
+const SAMPLE_SIZE = 1000;
+async function checkColumnData(connection, owner, tableName, columns) {
+    console.log('[checkColumnData] START:', owner, tableName, 'columns:', columns.length);
+    try {
+        const columnNames = columns.map(c => '"' + c.columnName + '"').join(', ');
+        const sql = 'SELECT ' + columnNames + ' FROM "' + owner + '"."' + tableName + '" FETCH FIRST ' + SAMPLE_SIZE + ' ROWS ONLY';
+        const result = await connection.execute(sql, [], {
+            outFormat: oracledb_1.default.OUT_FORMAT_ARRAY,
+        });
+        const rows = (result.rows || []);
+        const totalRows = rows.length;
+        if (totalRows === 0) {
+            console.log('[checkColumnData] No rows for', owner, tableName);
+            return columns.map(() => ({ hasData: false, percentage: 0 }));
+        }
+        const columnResults = [];
+        for (let colIndex = 0; colIndex < columns.length; colIndex++) {
+            let nonNullCount = 0;
+            for (const row of rows) {
+                if (row[colIndex] !== null && row[colIndex] !== undefined) {
+                    nonNullCount++;
+                }
+            }
+            const percentage = Math.round((nonNullCount / totalRows) * 100);
+            columnResults.push({
+                hasData: nonNullCount > 0,
+                percentage,
+            });
+        }
+        console.log('[checkColumnData] DONE:', owner, tableName, 'results:', columnResults.filter(r => r.hasData).length, 'columns with data');
+        return columnResults;
+    }
+    catch (error) {
+        console.warn('[checkColumnData] ERROR:', owner, tableName, error);
+        return columns.map(() => ({ hasData: false, percentage: 0 }));
     }
 }
 async function executeOracleQuery(params, sql) {

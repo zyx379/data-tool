@@ -11,7 +11,7 @@ const api = {
     testConnection: (ds) => electron_1.ipcRenderer.invoke('db:testConnection', ds),
     getQueryHistory: () => electron_1.ipcRenderer.invoke('db:getQueryHistory'),
     clearQueryHistory: () => electron_1.ipcRenderer.invoke('db:clearQueryHistory'),
-    getSchema: (dataSourceId, ownerFilter, tableNamePattern) => electron_1.ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern),
+    getSchema: (dataSourceId, ownerFilter, tableNamePattern, useCache = true) => electron_1.ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern, useCache),
     executeQuery: (dataSourceId, sql) => electron_1.ipcRenderer.invoke('db:executeQuery', dataSourceId, sql),
     onSchemaProgress: (callback) => {
         const handler = (_, progress) => callback(progress);

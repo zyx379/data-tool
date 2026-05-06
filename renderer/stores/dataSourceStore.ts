@@ -67,14 +67,14 @@ interface DataSourceStore {
   filterRules: string[];
   cachedSchema: CachedSchema;
   usedFields: Record<string, Record<string, boolean>>;
-  showOnlyUsedFieldsByTable: Record<string, boolean>; // 按表配置
+  showOnlyUsedFieldsByTable: Record<string, boolean>;
   columnSearchTerm: string;
-  sidebarCollapsed: boolean; // 左侧菜单收起状态
-  tableListCollapsed: boolean; // 表列表收起状态
-  schemaFilterPattern: string; // 当前正则过滤表达式
-  schemaFilterHistory: string[]; // 正则过滤历史记录
-  abortController: AbortController | null; // 用于取消加载
-  schemaProgress: SchemaProgress | null; // 当前加载进度
+  sidebarCollapsed: boolean;
+  tableListCollapsed: boolean;
+  schemaFilterPattern: string;
+  schemaFilterHistory: string[];
+  abortController: AbortController | null;
+  schemaProgress: SchemaProgress | null;
   loadDataSources: () => Promise<void>;
   createDataSource: (ds: Omit<DataSource, 'id'>) => Promise<DataSource>;
   updateDataSource: (id: string, ds: Partial<DataSource>) => Promise<DataSource>;
@@ -111,7 +111,7 @@ declare global {
       testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
       getQueryHistory: () => Promise<any[]>;
       clearQueryHistory: () => Promise<void>;
-      getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string) => Promise<TableInfo[]>;
+      getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean) => Promise<TableInfo[]>;
       executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
       onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
     };
@@ -130,7 +130,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       filterRules: ['^'],
       cachedSchema: {},
       usedFields: {},
-      showOnlyUsedFieldsByTable: {}, // 默认全部显示
+      showOnlyUsedFieldsByTable: {},
       columnSearchTerm: '',
       sidebarCollapsed: false,
       tableListCollapsed: false,
@@ -180,46 +180,22 @@ export const useDataSourceStore = create<DataSourceStore>()(
         set({ schemaLoading: true, schemaError: null, abortController: controller });
 
         try {
-          const { cachedSchema, schemaFilterPattern } = get();
+          const { schemaFilterPattern } = get();
 
           let ownerFilter: string | undefined;
           let tableNamePattern: string | undefined;
           
           if (schemaFilterPattern) {
-            console.log('schemaFilterPattern:', schemaFilterPattern);
             const ownerMatch = schemaFilterPattern.match(/^([A-Za-z0-9_]+)\.(.+)$/);
-            console.log('ownerMatch:', ownerMatch);
             if (ownerMatch) {
               ownerFilter = ownerMatch[1].toUpperCase();
               tableNamePattern = ownerMatch[2];
-              console.log('ownerFilter set to:', ownerFilter);
-              console.log('tableNamePattern set to:', tableNamePattern);
             } else {
               tableNamePattern = schemaFilterPattern;
-              console.log('tableNamePattern set to:', tableNamePattern);
             }
           }
 
-          if (useCache && cachedSchema[dataSourceId] && !ownerFilter && !tableNamePattern) {
-            console.log('Using cached schema for data source:', dataSourceId);
-            set({
-              schema: cachedSchema[dataSourceId].tables,
-              schemaLoading: false,
-              abortController: null,
-              lastSchemaUpdate: new Date(cachedSchema[dataSourceId].updatedAt),
-            });
-            return;
-          }
-
-          console.log('=== Calling getSchema ===');
-          console.log('dataSourceId:', dataSourceId);
-          console.log('ownerFilter:', ownerFilter);
-          console.log('tableNamePattern:', tableNamePattern);
-          console.log('electronAPI available:', !!window.electronAPI);
-          console.log('getSchema function:', typeof window.electronAPI?.getSchema);
-          const schema = await window.electronAPI.getSchema(dataSourceId, ownerFilter, tableNamePattern);
-          console.log('=== Schema received ===');
-          console.log('Schema length:', schema.length);
+          const schema = await window.electronAPI.getSchema(dataSourceId, ownerFilter, tableNamePattern, useCache);
 
           if (controller.signal.aborted) {
             return;
@@ -241,14 +217,21 @@ export const useDataSourceStore = create<DataSourceStore>()(
             }
           }
 
+          const processedSchema = filteredSchema.map(table => ({
+            ...table,
+            columns: table.columns.map(col => ({
+              ...col,
+              isUsed: col.isUsed ?? (col.hasData && !col.isPrimaryKey),
+            })),
+          }));
+
           set((state) => {
-            let mergedTables = filteredSchema;
+            let mergedTables = processedSchema;
             
             if (mergeWithExisting && state.schema.length > 0) {
               const existingTableNames = new Set(state.schema.map(t => t.tableName));
-              const newTables = filteredSchema.filter(t => !existingTableNames.has(t.tableName));
+              const newTables = processedSchema.filter(t => !existingTableNames.has(t.tableName));
               mergedTables = [...state.schema, ...newTables];
-              console.log(`Merged schema: ${state.schema.length} existing + ${newTables.length} new = ${mergedTables.length} total`);
             }
 
             return {
@@ -256,13 +239,6 @@ export const useDataSourceStore = create<DataSourceStore>()(
               schemaLoading: false,
               abortController: null,
               lastSchemaUpdate: new Date(),
-              cachedSchema: {
-                ...state.cachedSchema,
-                [dataSourceId]: {
-                  tables: mergedTables,
-                  updatedAt: new Date().toISOString(),
-                },
-              },
             };
           });
         } catch (error) {
@@ -353,7 +329,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       },
 
       getShowOnlyUsedFieldsByTable: (tableKey) => {
-        return get().showOnlyUsedFieldsByTable[tableKey] || false; // 默认全部显示
+        return get().showOnlyUsedFieldsByTable[tableKey] || false;
       },
 
       setColumnSearchTerm: (value) => {
@@ -373,12 +349,13 @@ export const useDataSourceStore = create<DataSourceStore>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         filterRules: state.filterRules,
-        cachedSchema: state.cachedSchema,
         usedFields: state.usedFields,
         showOnlyUsedFieldsByTable: state.showOnlyUsedFieldsByTable,
         columnSearchTerm: state.columnSearchTerm,
         sidebarCollapsed: state.sidebarCollapsed,
         tableListCollapsed: state.tableListCollapsed,
+        schemaFilterPattern: state.schemaFilterPattern,
+        schemaFilterHistory: state.schemaFilterHistory,
       }),
     }
   )

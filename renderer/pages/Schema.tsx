@@ -167,7 +167,7 @@ function Schema() {
       const tableKey = `${activeDataSource.id}_${table.tableName}`;
       if (getShowOnlyUsedFieldsByTable(tableKey)) {
         const usedFieldsSet = getUsedFields(activeDataSource.id, table.tableName);
-        columns = columns.filter((col) => usedFieldsSet.has(col.columnName));
+        columns = columns.filter((col) => col.isUsed || usedFieldsSet.has(col.columnName));
       }
     }
     
@@ -771,7 +771,7 @@ function Schema() {
                         <tbody className="divide-y divide-gray-200">
                           {getTableColumns(activeTable.tableInfo).map((col) => {
                             const usedFieldsSet = activeDataSource?.id ? getUsedFields(activeDataSource.id, activeTable.tableName) : new Set();
-                            const isUsed = usedFieldsSet.has(col.columnName);
+                            const isUsed = col.isUsed || usedFieldsSet.has(col.columnName);
 
                             return (
                               <tr key={col.columnName} className={`hover:bg-gray-50 ${isUsed ? 'bg-green-50' : ''}`}>

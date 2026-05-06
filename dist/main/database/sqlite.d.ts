@@ -29,3 +29,11 @@ export declare function getActiveDataSource(): DataSourceRecord | undefined;
 export declare function getQueryHistory(limit?: number): any[];
 export declare function addQueryHistory(history: Omit<any, 'id'>): void;
 export declare function clearQueryHistory(): void;
+export declare const SCHEMA_CACHE_VERSION = "v2";
+export declare function getSchemaCache(dataSourceId: string, filterPattern?: string): any | undefined;
+export declare function setSchemaCache(dataSourceId: string, schemaData: any[], filterPattern?: string): {
+    id: string;
+    cachedAt: string;
+};
+export declare function clearSchemaCache(dataSourceId?: string): void;
+export declare function cleanOldSchemaCache(keepDays?: number): void;

@@ -5,6 +5,9 @@ export interface TableColumn {
     dataDefault: string | null;
     comments: string;
     isPrimaryKey: boolean;
+    hasData?: boolean;
+    dataPercentage?: number;
+    isUsed?: boolean;
 }
 export interface TableIndex {
     indexName: string;

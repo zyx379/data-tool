@@ -17,7 +17,7 @@ export interface ElectronAPI {
     }>;
     getQueryHistory: () => Promise<any[]>;
     clearQueryHistory: () => Promise<void>;
-    getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string) => Promise<any[]>;
+    getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean) => Promise<any[]>;
     executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
     onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
 }

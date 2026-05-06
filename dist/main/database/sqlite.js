@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.SCHEMA_CACHE_VERSION = void 0;
 exports.initDatabase = initDatabase;
 exports.closeDatabase = closeDatabase;
 exports.encryptPassword = encryptPassword;
@@ -17,6 +18,10 @@ exports.getActiveDataSource = getActiveDataSource;
 exports.getQueryHistory = getQueryHistory;
 exports.addQueryHistory = addQueryHistory;
 exports.clearQueryHistory = clearQueryHistory;
+exports.getSchemaCache = getSchemaCache;
+exports.setSchemaCache = setSchemaCache;
+exports.clearSchemaCache = clearSchemaCache;
+exports.cleanOldSchemaCache = cleanOldSchemaCache;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -86,6 +91,23 @@ async function initDatabase() {
       dataSourceId TEXT NOT NULL,
       dataSourceName TEXT NOT NULL
     )
+  `);
+    db.run(`
+    CREATE TABLE IF NOT EXISTS schema_cache (
+      id TEXT PRIMARY KEY,
+      dataSourceId TEXT NOT NULL,
+      schemaData TEXT NOT NULL,
+      filterPattern TEXT,
+      cachedAt TEXT NOT NULL,
+      version TEXT NOT NULL,
+      FOREIGN KEY (dataSourceId) REFERENCES data_sources(id) ON DELETE CASCADE
+    )
+  `);
+    db.run(`
+    CREATE INDEX IF NOT EXISTS idx_schema_cache_dataSourceId ON schema_cache(dataSourceId)
+  `);
+    db.run(`
+    CREATE INDEX IF NOT EXISTS idx_schema_cache_dataSourceId_filter ON schema_cache(dataSourceId, filterPattern)
   `);
     saveDatabase();
     console.log('Database initialized successfully');
@@ -251,5 +273,59 @@ function addQueryHistory(history) {
 function clearQueryHistory() {
     const database = getDb();
     database.run('DELETE FROM query_history');
+    saveDatabase();
+}
+exports.SCHEMA_CACHE_VERSION = 'v2';
+function getSchemaCache(dataSourceId, filterPattern) {
+    const database = getDb();
+    const stmt = database.prepare('SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) AND version = ? ORDER BY cachedAt DESC LIMIT 1');
+    const bindFilter = filterPattern || null;
+    stmt.bind([dataSourceId, bindFilter, bindFilter, exports.SCHEMA_CACHE_VERSION]);
+    if (stmt.step()) {
+        const row = stmt.get();
+        stmt.free();
+        try {
+            return {
+                id: row[0],
+                dataSourceId: row[1],
+                schemaData: JSON.parse(row[2]),
+                filterPattern: row[3],
+                cachedAt: row[4],
+                version: row[5],
+            };
+        }
+        catch {
+            return undefined;
+        }
+    }
+    stmt.free();
+    return undefined;
+}
+function setSchemaCache(dataSourceId, schemaData, filterPattern) {
+    const database = getDb();
+    const id = (0, uuid_1.v4)();
+    const now = new Date().toISOString();
+    const schemaJson = JSON.stringify(schemaData);
+    database.run(`INSERT INTO schema_cache (id, dataSourceId, schemaData, filterPattern, cachedAt, version)
+     VALUES (?, ?, ?, ?, ?, ?)`, [id, dataSourceId, schemaJson, filterPattern || null, now, exports.SCHEMA_CACHE_VERSION]);
+    saveDatabase();
+    return { id, cachedAt: now };
+}
+function clearSchemaCache(dataSourceId) {
+    const database = getDb();
+    if (dataSourceId) {
+        database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
+    }
+    else {
+        database.run('DELETE FROM schema_cache');
+    }
+    saveDatabase();
+}
+function cleanOldSchemaCache(keepDays = 30) {
+    const database = getDb();
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - keepDays);
+    const cutoffStr = cutoffDate.toISOString();
+    database.run('DELETE FROM schema_cache WHERE cachedAt < ?', [cutoffStr]);
     saveDatabase();
 }
