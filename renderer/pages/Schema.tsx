@@ -80,6 +80,7 @@ function Schema() {
     schemaLoading,
     schemaError,
     loadDataSources,
+    loadSchema,
     setActiveDataSource,
     refreshSchema,
     refreshSchemaWithMerge,
@@ -115,6 +116,12 @@ function Schema() {
     loadDataSources();
   }, [loadDataSources]);
 
+  useEffect(() => {
+    if (activeDataSource?.id && schema.length === 0) {
+      loadSchema(activeDataSource.id, true);
+    }
+  }, [activeDataSource, schema.length, loadSchema]);
+
   const filteredTables = schema.filter((table) => {
     if (!searchTerm) return true;
     return (
@@ -127,6 +134,7 @@ function Schema() {
     await setActiveDataSource(dsId);
     setOpenTabs([]);
     setActiveTabKey(null);
+    await loadSchema(dsId, true);
   };
 
   const openTable = (table: TableInfo) => {
@@ -177,7 +185,7 @@ function Schema() {
   const getUsedColumns = (table: TableInfo) => {
     if (!activeDataSource?.id) return [];
     const usedFieldsSet = getUsedFields(activeDataSource.id, table.tableName);
-    return table.columns.filter(col => usedFieldsSet.has(col.columnName));
+    return table.columns.filter(col => col.isUsed || usedFieldsSet.has(col.columnName));
   };
 
   const addQueryCondition = (tableName: string, columnName: string) => {
