@@ -315,10 +315,10 @@ export const SCHEMA_CACHE_VERSION = 'v2';
 
 export function getSchemaCache(dataSourceId: string, filterPattern?: string, matchAnyFilter: boolean = false): any | undefined {
   const database = getDb();
-  
+
   let query: string;
   let params: any[];
-  
+
   if (matchAnyFilter) {
     query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND version = ? ORDER BY cachedAt DESC';
     params = [dataSourceId, SCHEMA_CACHE_VERSION];
@@ -327,7 +327,7 @@ export function getSchemaCache(dataSourceId: string, filterPattern?: string, mat
     const bindFilter = filterPattern || null;
     params = [dataSourceId, bindFilter, bindFilter, SCHEMA_CACHE_VERSION];
   }
-  
+
   const stmt = database.prepare(query);
   stmt.bind(params);
 
@@ -347,20 +347,20 @@ export function getSchemaCache(dataSourceId: string, filterPattern?: string, mat
       // skip invalid JSON
     }
   }
-  
+
   stmt.free();
-  
+
   if (results.length === 0) {
     return undefined;
   }
-  
+
   if (!matchAnyFilter || results.length === 1) {
     return results[0];
   }
-  
+
   const mergedSchemaData: any[] = [];
   const seenTables = new Set<string>();
-  
+
   for (const result of results) {
     for (const table of result.schemaData) {
       if (!seenTables.has(table.tableName)) {
@@ -369,7 +369,7 @@ export function getSchemaCache(dataSourceId: string, filterPattern?: string, mat
       }
     }
   }
-  
+
   return {
     id: results[0].id,
     dataSourceId: results[0].dataSourceId,
@@ -414,4 +414,37 @@ export function cleanOldSchemaCache(keepDays: number = 30) {
 
   database.run('DELETE FROM schema_cache WHERE cachedAt < ?', [cutoffStr]);
   saveDatabase();
+}
+
+export function removeTableFromSchemaCache(dataSourceId: string, tableName: string) {
+  const database = getDb();
+  const allCaches = getSchemaCache(dataSourceId, undefined, true);
+  if (!allCaches) return;
+
+  const schemaArray = Array.isArray(allCaches.schemaData) ? allCaches.schemaData : [];
+  const filteredSchema = schemaArray.filter((table: any) => table.tableName !== tableName);
+
+  database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
+  saveDatabase();
+
+  if (filteredSchema.length > 0) {
+    setSchemaCache(dataSourceId, filteredSchema, undefined);
+  }
+}
+
+export function removeTablesFromSchemaCache(dataSourceId: string, tableNames: string[]) {
+  const database = getDb();
+  const allCaches = getSchemaCache(dataSourceId, undefined, true);
+  if (!allCaches) return;
+
+  const schemaArray = Array.isArray(allCaches.schemaData) ? allCaches.schemaData : [];
+  const tableNameSet = new Set(tableNames);
+  const filteredSchema = schemaArray.filter((table: any) => !tableNameSet.has(table.tableName));
+
+  database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
+  saveDatabase();
+
+  if (filteredSchema.length > 0) {
+    setSchemaCache(dataSourceId, filteredSchema, undefined);
+  }
 }

@@ -14,6 +14,8 @@ import {
   setSchemaCache,
   clearSchemaCache,
   cleanOldSchemaCache,
+  removeTableFromSchemaCache,
+  removeTablesFromSchemaCache,
   SCHEMA_CACHE_VERSION,
 } from '../database/sqlite';
 import { getOracleTables, executeOracleQuery, OracleConnectionParams } from '../database/oracle';
@@ -273,6 +275,28 @@ export function registerIpcHandlers() {
       }
     } catch (error) {
       console.error('Error cancelling schema load:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:removeTableFromCache', async (_, dataSourceId: string, tableName: string) => {
+    try {
+      console.log('Removing table from cache:', dataSourceId, tableName);
+      removeTableFromSchemaCache(dataSourceId, tableName);
+      console.log('Table removed from cache');
+    } catch (error) {
+      console.error('Error removing table from cache:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:removeTablesFromCache', async (_, dataSourceId: string, tableNames: string[]) => {
+    try {
+      console.log('Removing tables from cache:', dataSourceId, tableNames);
+      removeTablesFromSchemaCache(dataSourceId, tableNames);
+      console.log('Tables removed from cache');
+    } catch (error) {
+      console.error('Error removing tables from cache:', error);
       throw error;
     }
   });

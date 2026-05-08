@@ -97,7 +97,8 @@ interface DataSourceStore {
   refreshSchema: () => Promise<void>;
   refreshSchemaWithMerge: () => Promise<void>;
   cancelSchemaLoad: () => void;
-  removeTable: (tableName: string) => void;
+  removeTable: (tableName: string) => Promise<void>;
+  removeTables: (tableNames: string[]) => Promise<void>;
   setSchemaFilterPattern: (pattern: string) => void;
   addSchemaFilterHistory: (pattern: string) => void;
   setSchemaProgress: (progress: SchemaProgress | null) => void;
@@ -132,6 +133,8 @@ declare global {
       executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
       onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
       cancelSchemaLoad: () => Promise<void>;
+      removeTableFromCache: (dataSourceId: string, tableName: string) => Promise<void>;
+      removeTablesFromCache: (dataSourceId: string, tableNames: string[]) => Promise<void>;
     };
   }
 }
@@ -205,7 +208,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
 
         let ownerFilter: string | undefined;
         let tableNamePattern: string | undefined;
-        
+
         if (schemaFilterPattern) {
           const ownerMatch = schemaFilterPattern.match(/^([A-Za-z0-9_]+)\.(.+)$/);
           if (ownerMatch) {
@@ -235,7 +238,6 @@ export const useDataSourceStore = create<DataSourceStore>()(
               return regex.test(tableNameOnly);
             });
           } catch (e) {
-            // invalid regex, load all tables
           }
         }
 
@@ -249,7 +251,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
 
         set((state) => {
           let mergedTables = processedSchema;
-          
+
           if (mergeWithExisting && state.schema.length > 0) {
             const existingTableNames = new Set(state.schema.map(t => t.tableName));
             const newTables = processedSchema.filter(t => !existingTableNames.has(t.tableName));
@@ -300,10 +302,25 @@ export const useDataSourceStore = create<DataSourceStore>()(
       }
     },
 
-      removeTable: (tableName: string) => {
+      removeTable: async (tableName: string) => {
+        const { activeDataSource } = get();
         set((state) => ({
           schema: state.schema.filter(t => t.tableName !== tableName),
         }));
+        if (activeDataSource?.id) {
+          await window.electronAPI.removeTableFromCache(activeDataSource.id, tableName);
+        }
+      },
+
+      removeTables: async (tableNames: string[]) => {
+        const { activeDataSource } = get();
+        const tableNameSet = new Set(tableNames);
+        set((state) => ({
+          schema: state.schema.filter(t => !tableNameSet.has(t.tableName)),
+        }));
+        if (activeDataSource?.id) {
+          await window.electronAPI.removeTablesFromCache(activeDataSource.id, tableNames);
+        }
       },
 
       refreshSchema: async () => {

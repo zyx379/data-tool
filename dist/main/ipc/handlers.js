@@ -292,6 +292,28 @@ function registerIpcHandlers() {
             throw error;
         }
     });
+    electron_1.ipcMain.handle('db:removeTableFromCache', async (_, dataSourceId, tableName) => {
+        try {
+            console.log('Removing table from cache:', dataSourceId, tableName);
+            (0, sqlite_1.removeTableFromSchemaCache)(dataSourceId, tableName);
+            console.log('Table removed from cache');
+        }
+        catch (error) {
+            console.error('Error removing table from cache:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('db:removeTablesFromCache', async (_, dataSourceId, tableNames) => {
+        try {
+            console.log('Removing tables from cache:', dataSourceId, tableNames);
+            (0, sqlite_1.removeTablesFromSchemaCache)(dataSourceId, tableNames);
+            console.log('Tables removed from cache');
+        }
+        catch (error) {
+            console.error('Error removing tables from cache:', error);
+            throw error;
+        }
+    });
     electron_1.ipcMain.handle('db:executeQuery', async (_, dataSourceId, sql) => {
         try {
             console.log('Executing query on data source:', dataSourceId, sql);

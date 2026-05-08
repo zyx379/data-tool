@@ -22,6 +22,8 @@ export interface ElectronAPI {
   executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
   onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
   cancelSchemaLoad: () => Promise<void>;
+  removeTableFromCache: (dataSourceId: string, tableName: string) => Promise<void>;
+  removeTablesFromCache: (dataSourceId: string, tableNames: string[]) => Promise<void>;
 }
 
 const api: ElectronAPI = {
@@ -43,6 +45,8 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('schema:progress', handler);
   },
   cancelSchemaLoad: () => ipcRenderer.invoke('db:cancelSchemaLoad'),
+  removeTableFromCache: (dataSourceId, tableName) => ipcRenderer.invoke('db:removeTableFromCache', dataSourceId, tableName),
+  removeTablesFromCache: (dataSourceId, tableNames) => ipcRenderer.invoke('db:removeTablesFromCache', dataSourceId, tableNames),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

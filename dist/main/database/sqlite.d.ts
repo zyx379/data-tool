@@ -37,3 +37,5 @@ export declare function setSchemaCache(dataSourceId: string, schemaData: any[], 
 };
 export declare function clearSchemaCache(dataSourceId?: string): void;
 export declare function cleanOldSchemaCache(keepDays?: number): void;
+export declare function removeTableFromSchemaCache(dataSourceId: string, tableName: string): void;
+export declare function removeTablesFromSchemaCache(dataSourceId: string, tableNames: string[]): void;

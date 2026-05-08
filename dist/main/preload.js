@@ -20,5 +20,7 @@ const api = {
         return () => electron_1.ipcRenderer.removeListener('schema:progress', handler);
     },
     cancelSchemaLoad: () => electron_1.ipcRenderer.invoke('db:cancelSchemaLoad'),
+    removeTableFromCache: (dataSourceId, tableName) => electron_1.ipcRenderer.invoke('db:removeTableFromCache', dataSourceId, tableName),
+    removeTablesFromCache: (dataSourceId, tableNames) => electron_1.ipcRenderer.invoke('db:removeTablesFromCache', dataSourceId, tableNames),
 };
 electron_1.contextBridge.exposeInMainWorld('electronAPI', api);

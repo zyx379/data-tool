@@ -40,6 +40,10 @@ function Schema() {
   const [showSaveConditionModal, setShowSaveConditionModal] = useState(false);
   const [savedConditionName, setSavedConditionName] = useState('');
   const [hasAutoAddedDefaultFields, setHasAutoAddedDefaultFields] = useState(false);
+  const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tableName: string; index: number } | null>(null);
+  const [ownerContextMenu, setOwnerContextMenu] = useState<{ x: number; y: number; owner: string } | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'table' | 'owner'; name: string; tableNames?: string[] } | null>(null);
 
   const toggleOwner = (owner: string) => {
     setExpandedOwners(prev => {
@@ -61,13 +65,90 @@ function Schema() {
 
   const handleDeleteTable = () => {
     if (contextMenu) {
-      removeTable(contextMenu.tableName);
+      setDeleteTarget({ type: 'table', name: contextMenu.tableName });
+      setShowDeleteConfirm(true);
       closeContextMenu();
     }
   };
 
   const closeContextMenu = () => {
     setContextMenu(null);
+  };
+
+  const handleTabContextMenu = (e: React.MouseEvent, tableName: string, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setTabContextMenu({ x: e.clientX, y: e.clientY, tableName, index });
+  };
+
+  const closeTabContextMenu = () => {
+    setTabContextMenu(null);
+  };
+
+  const closeAllTabs = () => {
+    setOpenTabs([]);
+    setActiveTabKey(null);
+    closeTabContextMenu();
+  };
+
+  const closeOtherTabs = () => {
+    if (tabContextMenu) {
+      const newTabs = openTabs.filter((_, idx) => idx === tabContextMenu.index);
+      setOpenTabs(newTabs);
+      setActiveTabKey(newTabs.length > 0 ? newTabs[0].tableName : null);
+      closeTabContextMenu();
+    }
+  };
+
+  const closeLeftTabs = () => {
+    if (tabContextMenu) {
+      const newTabs = openTabs.filter((_, idx) => idx >= tabContextMenu.index);
+      setOpenTabs(newTabs);
+      setActiveTabKey(newTabs.length > 0 ? newTabs[0].tableName : null);
+      closeTabContextMenu();
+    }
+  };
+
+  const closeRightTabs = () => {
+    if (tabContextMenu) {
+      const newTabs = openTabs.filter((_, idx) => idx <= tabContextMenu.index);
+      setOpenTabs(newTabs);
+      setActiveTabKey(newTabs.length > 0 ? newTabs[newTabs.length - 1].tableName : null);
+      closeTabContextMenu();
+    }
+  };
+
+  const handleOwnerContextMenu = (e: React.MouseEvent, owner: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOwnerContextMenu({ x: e.clientX, y: e.clientY, owner });
+  };
+
+  const closeOwnerContextMenu = () => {
+    setOwnerContextMenu(null);
+  };
+
+  const removeAllTablesInOwner = () => {
+    if (ownerContextMenu) {
+      const ownerTables = schema.filter(table => table.owner === ownerContextMenu.owner);
+      const tableNames = ownerTables.map(t => t.tableName);
+      setDeleteTarget({ type: 'owner', name: ownerContextMenu.owner, tableNames });
+      setShowDeleteConfirm(true);
+      closeOwnerContextMenu();
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    
+    if (deleteTarget.type === 'table') {
+      await removeTable(deleteTarget.name);
+    } else if (deleteTarget.type === 'owner' && deleteTarget.tableNames) {
+      await removeTables(deleteTarget.tableNames);
+    }
+    
+    setShowDeleteConfirm(false);
+    setDeleteTarget(null);
   };
 
   const saveCurrentQueryConditions = () => {
@@ -134,7 +215,11 @@ function Schema() {
   };
 
   useEffect(() => {
-    const handleClick = () => closeContextMenu();
+    const handleClick = () => {
+      closeContextMenu();
+      closeTabContextMenu();
+      closeOwnerContextMenu();
+    };
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
   }, []);
@@ -170,6 +255,7 @@ function Schema() {
     toggleSidebar,
     toggleTableList,
     removeTable,
+    removeTables,
     saveQueryConditionTemplate,
     deleteQueryConditionTemplate,
     getQueryConditionTemplatesForTable,
@@ -430,25 +516,25 @@ function Schema() {
   return (
     <div className="flex flex-1">
       {/* 左侧导航栏 */}
-      <div className={`${sidebarCollapsed ? 'w-14' : 'w-64'} bg-gradient-to-b from-slate-50 to-white border-r border-slate-200 flex flex-col transition-all duration-300 shadow-sm`}>
+      <div className={`${sidebarCollapsed ? 'w-14' : 'w-56'} bg-gradient-to-b from-slate-50 to-white border-r border-slate-200 flex flex-col transition-all duration-300 shadow-sm`}>
         {/* 头部 */}
-        <div className="p-3 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-50">
+        <div className="px-2 py-2 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-50">
           {!sidebarCollapsed && (
-            <h1 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+            <h1 className="text-sm font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
               zoehis-helper
             </h1>
           )}
           <button 
             onClick={toggleSidebar} 
-            className="p-1.5 hover:bg-slate-200 rounded-full transition-all duration-200 text-slate-500 hover:text-slate-700 hover:shadow-md"
+            className="p-1 hover:bg-slate-200 rounded-full transition-all duration-200 text-slate-500 hover:text-slate-700"
             title={sidebarCollapsed ? '展开导航栏' : '收起导航栏'}
           >
             {sidebarCollapsed ? (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
               </svg>
             ) : (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
               </svg>
             )}
@@ -456,28 +542,28 @@ function Schema() {
         </div>
         
         {/* 导航菜单 */}
-        <nav className="flex-1 p-3 space-y-1.5">
+        <nav className="flex-1 py-2 px-1 space-y-1">
           <button
             onClick={() => setShowDatasources(false)}
-            className={`w-full flex items-center justify-center ${!sidebarCollapsed ? 'space-x-3 px-3' : ''} py-2.5 rounded-xl transition-all duration-200 ${
+            className={`w-full flex items-center ${!sidebarCollapsed ? 'justify-start space-x-2 pl-2' : 'justify-center'} py-2 rounded-lg transition-all duration-200 ${
               !showDatasources 
                 ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-md shadow-blue-200' 
                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
             }`}
           >
-            <span className="text-xl">📊</span>
+            <span className="text-lg">📊</span>
             {!sidebarCollapsed && <span className="font-medium text-sm">数据查询</span>}
           </button>
           
           <button
             onClick={() => setShowDatasources(true)}
-            className={`w-full flex items-center justify-center ${!sidebarCollapsed ? 'space-x-3 px-3' : ''} py-2.5 rounded-xl transition-all duration-200 ${
+            className={`w-full flex items-center ${!sidebarCollapsed ? 'justify-start space-x-2 pl-2' : 'justify-center'} py-2 rounded-lg transition-all duration-200 ${
               showDatasources 
                 ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-md shadow-blue-200' 
                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
             }`}
           >
-            <span className="text-xl">🔌</span>
+            <span className="text-lg">🔌</span>
             {!sidebarCollapsed && <span className="font-medium text-sm">数据源管理</span>}
           </button>
         </nav>
@@ -533,7 +619,27 @@ function Schema() {
                       type="text"
                       placeholder="搜索表名或注释..."
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={(e) => {
+                        const newTerm = e.target.value;
+                        setSearchTerm(newTerm);
+                        if (newTerm && schema.length > 0) {
+                          const termLower = newTerm.toLowerCase();
+                          const matchedOwners = new Set<string>();
+                          schema.forEach(table => {
+                            if (
+                              table.tableName.toLowerCase().includes(termLower) ||
+                              table.comments.toLowerCase().includes(termLower)
+                            ) {
+                              if (table.owner) {
+                                matchedOwners.add(table.owner);
+                              }
+                            }
+                          });
+                          setExpandedOwners(matchedOwners);
+                        } else {
+                          setExpandedOwners(new Set());
+                        }
+                      }}
                       className="w-full border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 bg-slate-50 focus:bg-white"
                     />
                   </div>
@@ -625,6 +731,7 @@ function Schema() {
                             <div key={owner} className="mb-2">
                               <div
                                 onClick={() => toggleOwner(owner)}
+                                onContextMenu={(e) => handleOwnerContextMenu(e, owner)}
                                 className={`flex items-center gap-2 px-3 py-2 rounded-xl cursor-pointer transition-all duration-200 ${
                                   hasOpenTable 
                                     ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200' 
@@ -714,7 +821,7 @@ function Schema() {
               <div className="flex-1 flex flex-col overflow-hidden">
                 {/* 标签页栏 */}
                 <div className="bg-white border-b border-slate-200 flex items-center overflow-x-auto shadow-sm">
-                  {openTabs.map((tab) => (
+                  {openTabs.map((tab, index) => (
                     <div
                       key={tab.tableName}
                       className={`flex items-center px-4 py-3 cursor-pointer min-w-max transition-all duration-200 group border-r border-slate-100 last:border-r-0 ${
@@ -723,6 +830,7 @@ function Schema() {
                           : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
                       }`}
                       onClick={() => setActiveTabKey(tab.tableName)}
+                      onContextMenu={(e) => handleTabContextMenu(e, tab.tableName, index)}
                     >
                       <span className="text-sm font-medium mr-2.5">{tab.tableInfo.comments || tab.tableName}</span>
                       <button
@@ -1183,7 +1291,25 @@ function Schema() {
                 type="text"
                 placeholder="如: ^T_|^ABC (留空加载全部)"
                 value={schemaFilterPattern}
-                onChange={(e) => setSchemaFilterPattern(e.target.value)}
+                onChange={(e) => {
+                  const newPattern = e.target.value;
+                  setSchemaFilterPattern(newPattern);
+                  if (newPattern && schema.length > 0) {
+                    try {
+                      const regex = new RegExp(newPattern);
+                      const matchedOwners = new Set<string>();
+                      schema.forEach(table => {
+                        if (regex.test(table.tableName)) {
+                          if (table.owner) {
+                            matchedOwners.add(table.owner);
+                          }
+                        }
+                      });
+                      setExpandedOwners(matchedOwners);
+                    } catch {
+                    }
+                  }
+                }}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
                 autoFocus
               />
@@ -1339,6 +1465,125 @@ function Schema() {
             </svg>
             删除表
           </button>
+        </div>
+      )}
+
+      {tabContextMenu && (
+        <div
+          className="fixed bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50 min-w-48"
+          style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+        >
+          <button
+            onClick={() => {
+              closeTab(tabContextMenu.tableName);
+              closeTabContextMenu();
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            关闭标签
+          </button>
+          <div className="border-t border-slate-100 my-1"></div>
+          <button
+            onClick={closeOtherTabs}
+            className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
+            </svg>
+            关闭其他标签
+          </button>
+          <button
+            onClick={closeLeftTabs}
+            disabled={tabContextMenu.index === 0}
+            className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            关闭左侧标签
+          </button>
+          <button
+            onClick={closeRightTabs}
+            disabled={tabContextMenu.index === openTabs.length - 1}
+            className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            关闭右侧标签
+          </button>
+          <div className="border-t border-slate-100 my-1"></div>
+          <button
+            onClick={closeAllTabs}
+            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+            </svg>
+            关闭全部标签
+          </button>
+        </div>
+      )}
+
+      {ownerContextMenu && (
+        <div
+          className="fixed bg-white rounded-lg shadow-xl border border-slate-200 py-1 z-50 min-w-48"
+          style={{ left: ownerContextMenu.x, top: ownerContextMenu.y }}
+        >
+          <button
+            onClick={removeAllTablesInOwner}
+            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            删除表空间下所有表
+          </button>
+        </div>
+      )}
+
+      {deleteTarget && showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+            <div className="flex items-center gap-4 p-4 border-b border-slate-200">
+              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-700">确认删除</h3>
+                <p className="text-sm text-slate-500">确定要删除吗？此操作不可撤销。</p>
+              </div>
+            </div>
+            <div className="p-4">
+              {deleteTarget.type === 'table' ? (
+                <p className="text-sm text-slate-600">即将删除表：<span className="font-mono font-medium">{deleteTarget.name}</span></p>
+              ) : (
+                <p className="text-sm text-slate-600">即将删除表空间 <span className="font-medium">{deleteTarget.name}</span> 下的 {deleteTarget.tableNames?.length} 张表</p>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 p-4 border-t border-slate-200">
+              <button
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setDeleteTarget(null);
+                }}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
