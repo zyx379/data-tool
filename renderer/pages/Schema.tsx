@@ -402,7 +402,9 @@ function Schema() {
     });
   };
 
-  const generateSQL = (table: TableInfo, tableName: string) => {
+  const MAX_QUERY_LIMIT = 1000;
+
+  const buildSQL = (table: TableInfo, tableName: string) => {
     const showOnlyUsed = activeDataSource?.id ? getShowOnlyUsedFieldsByTable(`${activeDataSource.id}_${tableName}`) : false;
     const usedColumns = getUsedColumns(table);
     
@@ -441,8 +443,22 @@ function Schema() {
     return sql;
   };
 
+  const generateSQL = (table: TableInfo, tableName: string) => {
+    let sql = buildSQL(table, tableName);
+    
+    if (activeDataSource?.type === 'oracle') {
+      sql = `SELECT * FROM (${sql}) WHERE ROWNUM <= ${MAX_QUERY_LIMIT}`;
+    } else if (activeDataSource?.type === 'dameng') {
+      sql = `SELECT TOP ${MAX_QUERY_LIMIT} * FROM (${sql})`;
+    } else {
+      sql += ` LIMIT ${MAX_QUERY_LIMIT}`;
+    }
+    
+    return sql;
+  };
+
   const exportSQL = (table: TableInfo, tableName: string) => {
-    const sql = generateSQL(table, tableName);
+    const sql = buildSQL(table, tableName);
     const blob = new Blob([sql], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -855,7 +871,7 @@ function Schema() {
                   
                   return (
                     <div className="flex-1 flex flex-col overflow-hidden p-6">
-                      <div className="flex items-center justify-between mb-6">
+                      <div className="mb-6">
                         <div>
                           <div className="flex items-center gap-2 mb-1">
                             <h2 className="text-xl font-bold text-slate-800">{activeTable.tableInfo.tableName}</h2>
@@ -866,20 +882,6 @@ function Schema() {
                           {activeTable.tableInfo.comments && (
                             <p className="text-slate-500 text-sm">{activeTable.tableInfo.comments}</p>
                           )}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <select
-                            value={activeDataSource?.id || ''}
-                            onChange={(e) => handleDataSourceChange(e.target.value)}
-                            className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 shadow-sm"
-                          >
-                            <option value="">选择数据源</option>
-                            {dataSources.map((ds) => (
-                              <option key={ds.id} value={ds.id}>
-                                {ds.name} ({ds.type})
-                              </option>
-                            ))}
-                          </select>
                         </div>
                       </div>
 
@@ -1039,21 +1041,19 @@ function Schema() {
                 )}
 
                 {activeSubTab === 'query' && (
-                  <div className="flex-1 flex flex-col overflow-hidden">
-                    <div className="flex-shrink-0 bg-gradient-to-br from-slate-50 to-white border-b border-slate-200 overflow-x-auto">
-                      <div className="p-4 space-y-3">
-                        <div className="flex items-center justify-between gap-4">
-                          <div className="flex items-center space-x-4">
-                            <label className="flex items-center space-x-2 cursor-pointer whitespace-nowrap">
-                              <input
-                                type="checkbox"
-                                checked={showColumnNamesInChinese}
-                                onChange={(e) => setShowColumnNamesInChinese(e.target.checked)}
-                                className="rounded"
-                              />
-                              <span className="text-sm">列名显示中文</span>
-                            </label>
-                          </div>
+                  <div className="flex-1 flex flex-col overflow-hidden relative">
+                    <div className="flex-shrink-0 bg-gradient-to-br from-slate-50 to-white border-b border-slate-200">
+                      <div className="flex items-center justify-between gap-4 p-4">
+                        <div className="flex items-center space-x-4 overflow-x-auto">
+                          <label className="flex items-center space-x-2 cursor-pointer whitespace-nowrap">
+                            <input
+                              type="checkbox"
+                              checked={showColumnNamesInChinese}
+                              onChange={(e) => setShowColumnNamesInChinese(e.target.checked)}
+                              className="rounded"
+                            />
+                            <span className="text-sm">列名显示中文</span>
+                          </label>
 
                           {activeTabKey && (() => {
                             const savedTemplates = getQueryConditionTemplatesForTable(activeTabKey);
@@ -1073,20 +1073,22 @@ function Schema() {
                               </div>
                             ) : null;
                           })()}
-
-                          <div className="flex items-center space-x-2 ml-auto">
-                            <button
-                              onClick={() => executeQuery(activeTable.tableInfo, activeTable.tableName)}
-                              disabled={isExecuting}
-                              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors font-medium text-sm"
-                            >
-                              {isExecuting ? '执行中...' : '执行查询'}
-                            </button>
-                            <button onClick={() => exportSQL(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors">导出 SQL</button>
-                            <button onClick={() => exportExcel(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors">导出 Excel</button>
-                          </div>
                         </div>
+                      </div>
 
+                      <div className="fixed top-24 right-6 z-20 flex items-center space-x-2">
+                        <button
+                          onClick={() => executeQuery(activeTable.tableInfo, activeTable.tableName)}
+                          disabled={isExecuting}
+                          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors font-medium text-sm shadow-md"
+                        >
+                          {isExecuting ? '执行中...' : '执行查询'}
+                        </button>
+                        <button onClick={() => exportSQL(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors shadow-md">导出 SQL</button>
+                        <button onClick={() => exportExcel(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors shadow-md">导出 Excel</button>
+                      </div>
+
+                      <div className="px-4 pb-4 space-y-3">
                         <div className="flex items-center gap-4">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-medium text-gray-600 whitespace-nowrap">查询条件:</span>
@@ -1130,22 +1132,31 @@ function Schema() {
                                 );
                               })}
                               {getUsedColumns(activeTable.tableInfo).length > 0 && (
-                                <select
-                                  className="border border-gray-300 rounded px-2 py-1 text-xs bg-white"
-                                  onChange={(e) => {
-                                    if (e.target.value) {
-                                      addQueryCondition(activeTable.tableName, e.target.value);
-                                      e.target.value = '';
-                                    }
-                                  }}
-                                >
-                                  <option value="">+ 添加</option>
-                                  {getUsedColumns(activeTable.tableInfo).map(col => (
-                                    <option key={col.columnName} value={col.columnName}>
-                                      {getColumnDisplayName(col)}
-                                    </option>
-                                  ))}
-                                </select>
+                                <div className="relative">
+                                  <input
+                                    type="text"
+                                    list={`columns-datalist-${activeTable.tableName}`}
+                                    placeholder="+ 添加字段"
+                                    className="border border-gray-300 rounded px-2 py-1 text-xs bg-white w-32"
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      if (value) {
+                                        const validColumns = getUsedColumns(activeTable.tableInfo).map(c => c.columnName);
+                                        if (validColumns.includes(value)) {
+                                          addQueryCondition(activeTable.tableName, value);
+                                          e.target.value = '';
+                                        }
+                                      }
+                                    }}
+                                  />
+                                  <datalist id={`columns-datalist-${activeTable.tableName}`}>
+                                    {getUsedColumns(activeTable.tableInfo).map(col => (
+                                      <option key={col.columnName} value={col.columnName}>
+                                        {getColumnDisplayName(col)}
+                                      </option>
+                                    ))}
+                                  </datalist>
+                                </div>
                               )}
                               {(queryConditions[activeTable.tableName] || []).length > 0 && (
                                 <button
@@ -1185,22 +1196,31 @@ function Schema() {
                                 );
                               })}
                               {getUsedColumns(activeTable.tableInfo).length > 0 && (
-                                <select
-                                  className="border border-gray-300 rounded px-2 py-1 text-xs bg-white"
-                                  onChange={(e) => {
-                                    if (e.target.value) {
-                                      addSortCondition(activeTable.tableName, e.target.value);
-                                      e.target.value = '';
-                                    }
-                                  }}
-                                >
-                                  <option value="">+ 添加</option>
-                                  {getUsedColumns(activeTable.tableInfo).map(col => (
-                                    <option key={col.columnName} value={col.columnName}>
-                                      {getColumnDisplayName(col)}
-                                    </option>
-                                  ))}
-                                </select>
+                                <div className="relative">
+                                  <input
+                                    type="text"
+                                    list={`sort-datalist-${activeTable.tableName}`}
+                                    placeholder="+ 添加字段"
+                                    className="border border-gray-300 rounded px-2 py-1 text-xs bg-white w-32"
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      if (value) {
+                                        const validColumns = getUsedColumns(activeTable.tableInfo).map(c => c.columnName);
+                                        if (validColumns.includes(value)) {
+                                          addSortCondition(activeTable.tableName, value);
+                                          e.target.value = '';
+                                        }
+                                      }
+                                    }}
+                                  />
+                                  <datalist id={`sort-datalist-${activeTable.tableName}`}>
+                                    {getUsedColumns(activeTable.tableInfo).map(col => (
+                                      <option key={col.columnName} value={col.columnName}>
+                                        {getColumnDisplayName(col)}
+                                      </option>
+                                    ))}
+                                  </datalist>
+                                </div>
                               )}
                             </div>
                           </div>
