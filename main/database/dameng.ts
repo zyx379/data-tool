@@ -59,7 +59,9 @@ export async function testDamengConnection(params: DamengConnectionParams): Prom
 export async function getDamengTables(
   params: DamengConnectionParams,
   onProgress?: ProgressCallback,
-  tableNamePattern?: string
+  tableNamePattern?: string,
+  abortSignal?: AbortSignal,
+  filterEmptyTables: boolean = false
 ): Promise<TableInfo[]> {
   const Connection = require('dmdb');
   const conn = new Connection({
@@ -76,8 +78,29 @@ export async function getDamengTables(
     }
   };
 
+  const abortPromise = abortSignal ? new Promise<never>((_, reject) => {
+    const handler = () => reject(new Error('Operation cancelled'));
+    abortSignal.addEventListener('abort', handler, { once: true });
+  }) : null;
+
+  const checkAbort = () => {
+    if (abortSignal?.aborted) {
+      throw new Error('Operation cancelled');
+    }
+  };
+
+  const raceWithAbort = async <T>(promise: Promise<T>): Promise<T> => {
+    if (abortPromise) {
+      return Promise.race([abortPromise, promise]) as Promise<T>;
+    }
+    return promise;
+  };
+
   try {
+    checkAbort();
+    
     console.log('tableNamePattern (in getDamengTables):', tableNamePattern);
+    console.log('filterEmptyTables:', filterEmptyTables);
     const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
     
     let filterDesc = '(all tables)';
@@ -104,6 +127,7 @@ export async function getDamengTables(
     
     query += ' ORDER BY TABLE_NAME';
     
+    checkAbort();
     const tablesResult = conn.execute(query);
 
     const tables: TableInfo[] = [];
@@ -119,6 +143,8 @@ export async function getDamengTables(
     reportProgress(0, totalTables, '开始加载表结构...', 'processing');
 
     for (let i = 0; i < tablesData.length; i++) {
+      checkAbort();
+      
       const row = tablesData[i];
       const tableName = row[0] as string;
 
@@ -126,6 +152,7 @@ export async function getDamengTables(
         reportProgress(i + 1, totalTables, tableName, 'processing');
       }
 
+      checkAbort();
       const columnsResult = conn.execute(`
         SELECT
           col.COLUMN_NAME,
@@ -142,6 +169,7 @@ export async function getDamengTables(
       const columns: TableColumn[] = [];
       const primaryKeys: Set<string> = new Set();
 
+      checkAbort();
       const pkResult = conn.execute(`
         SELECT col.column_name
         FROM USER_constraints con
@@ -164,6 +192,7 @@ export async function getDamengTables(
         });
       }
 
+      checkAbort();
       const indexesResult = conn.execute(`
         SELECT
           ind.INDEX_NAME,
@@ -185,31 +214,45 @@ export async function getDamengTables(
         });
       }
 
+      checkAbort();
       const commentsResult = conn.execute(`
         SELECT COMMENTS FROM USER_TAB_COMMENTS WHERE TABLE_NAME = '${tableName}'
       `);
       const tableComments = (commentsResult.rows && commentsResult.rows[0] && commentsResult.rows[0][0]) || '';
 
-      const dataResult = checkDamengColumnData(conn, tableName, columns);
+      checkAbort();
+      const dataResult = checkDamengColumnData(conn, tableName, columns, abortSignal);
+      
+      let hasTableData = false;
       for (let j = 0; j < columns.length; j++) {
         columns[j].hasData = dataResult[j]?.hasData || false;
         columns[j].dataPercentage = dataResult[j]?.percentage || 0;
+        if (dataResult[j]?.hasData) {
+          hasTableData = true;
+        }
       }
 
-      tables.push({
-        tableName,
-        comments: tableComments as string,
-        columns,
-        indexes,
-        owner: params.schema.toUpperCase(),
-      });
+      if (!filterEmptyTables || hasTableData) {
+        tables.push({
+          tableName,
+          comments: tableComments as string,
+          columns,
+          indexes,
+          owner: params.schema.toUpperCase(),
+        });
+      }
     }
 
     reportProgress(totalTables, totalTables, `加载完成 (${tables.length} 个表)`, 'complete');
     conn.close();
     return tables;
   } catch (error) {
-    reportProgress(0, 0, `错误: ${(error as Error).message}`, 'error');
+    if ((error as Error).message === 'Operation cancelled') {
+      console.log('Schema load cancelled by user');
+      reportProgress(0, 0, '已取消', 'error');
+    } else {
+      reportProgress(0, 0, `错误: ${(error as Error).message}`, 'error');
+    }
     conn.close();
     throw error;
   }
@@ -251,17 +294,35 @@ const SAMPLE_SIZE = 1000;
 function checkDamengColumnData(
   conn: any,
   tableName: string,
-  columns: TableColumn[]
+  columns: TableColumn[],
+  abortSignal?: AbortSignal
 ): { hasData: boolean; percentage: number }[] {
+  if (abortSignal?.aborted) {
+    throw new Error('Operation cancelled');
+  }
+  
   try {
     const columnNames = columns.map(c => `"${c.columnName}"`).join(', ');
+    
+    if (abortSignal?.aborted) {
+      throw new Error('Operation cancelled');
+    }
     
     const sql = `
       SELECT TOP ${SAMPLE_SIZE} ${columnNames}
       FROM "${tableName}"
     `;
 
+    if (abortSignal?.aborted) {
+      throw new Error('Operation cancelled');
+    }
+    
     const result = conn.execute(sql);
+    
+    if (abortSignal?.aborted) {
+      throw new Error('Operation cancelled');
+    }
+    
     const rows = (result.rows || []) as any[][];
     const totalRows = rows.length;
 
@@ -272,6 +333,10 @@ function checkDamengColumnData(
     const columnResults: { hasData: boolean; percentage: number }[] = [];
 
     for (let colIndex = 0; colIndex < columns.length; colIndex++) {
+      if (abortSignal?.aborted) {
+        throw new Error('Operation cancelled');
+      }
+      
       let nonNullCount = 0;
       
       for (const row of rows) {
@@ -289,6 +354,9 @@ function checkDamengColumnData(
 
     return columnResults;
   } catch (error) {
+    if ((error as Error).message === 'Operation cancelled') {
+      throw error;
+    }
     console.warn(`Error checking column data for ${tableName}:`, error);
     return columns.map(() => ({ hasData: false, percentage: 0 }));
   }

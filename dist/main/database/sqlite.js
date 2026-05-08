@@ -276,30 +276,63 @@ function clearQueryHistory() {
     saveDatabase();
 }
 exports.SCHEMA_CACHE_VERSION = 'v2';
-function getSchemaCache(dataSourceId, filterPattern) {
+function getSchemaCache(dataSourceId, filterPattern, matchAnyFilter = false) {
     const database = getDb();
-    const stmt = database.prepare('SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) AND version = ? ORDER BY cachedAt DESC LIMIT 1');
-    const bindFilter = filterPattern || null;
-    stmt.bind([dataSourceId, bindFilter, bindFilter, exports.SCHEMA_CACHE_VERSION]);
-    if (stmt.step()) {
+    let query;
+    let params;
+    if (matchAnyFilter) {
+        query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND version = ? ORDER BY cachedAt DESC';
+        params = [dataSourceId, exports.SCHEMA_CACHE_VERSION];
+    }
+    else {
+        query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) AND version = ? ORDER BY cachedAt DESC LIMIT 1';
+        const bindFilter = filterPattern || null;
+        params = [dataSourceId, bindFilter, bindFilter, exports.SCHEMA_CACHE_VERSION];
+    }
+    const stmt = database.prepare(query);
+    stmt.bind(params);
+    const results = [];
+    while (stmt.step()) {
         const row = stmt.get();
-        stmt.free();
         try {
-            return {
+            results.push({
                 id: row[0],
                 dataSourceId: row[1],
                 schemaData: JSON.parse(row[2]),
                 filterPattern: row[3],
                 cachedAt: row[4],
                 version: row[5],
-            };
+            });
         }
         catch {
-            return undefined;
+            // skip invalid JSON
         }
     }
     stmt.free();
-    return undefined;
+    if (results.length === 0) {
+        return undefined;
+    }
+    if (!matchAnyFilter || results.length === 1) {
+        return results[0];
+    }
+    const mergedSchemaData = [];
+    const seenTables = new Set();
+    for (const result of results) {
+        for (const table of result.schemaData) {
+            if (!seenTables.has(table.tableName)) {
+                seenTables.add(table.tableName);
+                mergedSchemaData.push(table);
+            }
+        }
+    }
+    return {
+        id: results[0].id,
+        dataSourceId: results[0].dataSourceId,
+        schemaData: mergedSchemaData,
+        filterPattern: null,
+        cachedAt: results[0].cachedAt,
+        version: results[0].version,
+    };
 }
 function setSchemaCache(dataSourceId, schemaData, filterPattern) {
     const database = getDb();

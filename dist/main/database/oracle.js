@@ -42,7 +42,7 @@ function escapeOracleRegex(pattern) {
     const specialChars = /([$()|\\])/g;
     return pattern.replace(specialChars, '\\$1');
 }
-async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern) {
+async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern, abortSignal, filterEmptyTables = false) {
     let connection = null;
     const schema = params.schema || params.username.toUpperCase();
     const reportProgress = (current, total, currentTable, phase) => {
@@ -50,18 +50,35 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
             onProgress({ current, total, currentTable, phase });
         }
     };
+    const abortPromise = abortSignal ? new Promise((_, reject) => {
+        const handler = () => reject(new Error('Operation cancelled'));
+        abortSignal.addEventListener('abort', handler, { once: true });
+    }) : null;
+    const checkAbort = () => {
+        if (abortSignal?.aborted) {
+            throw new Error('Operation cancelled');
+        }
+    };
+    const raceWithAbort = async (promise) => {
+        if (abortPromise) {
+            return Promise.race([abortPromise, promise]);
+        }
+        return promise;
+    };
     try {
+        checkAbort();
         const connectionString = buildConnectionString(params);
-        connection = await oracledb_1.default.getConnection({
+        connection = await raceWithAbort(oracledb_1.default.getConnection({
             user: params.username,
             password: params.password,
             connectString: connectionString,
-        });
+        }));
         console.log('=== DIAGNOSIS INFO ===');
         console.log('Connecting with schema:', schema);
         console.log('Username:', params.username);
         console.log('ownerFilter (in getOracleTables):', ownerFilter);
         console.log('tableNamePattern (in getOracleTables):', tableNamePattern);
+        console.log('filterEmptyTables:', filterEmptyTables);
         const hasOwnerFilter = ownerFilter && ownerFilter.trim();
         const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
         let filterDesc = '(all tables)';
@@ -99,7 +116,7 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
         }
         console.log('Final query:', query);
         query += ' ORDER BY owner, table_name';
-        const tablesResult = await connection.execute(query);
+        const tablesResult = await raceWithAbort(connection.execute(query));
         console.log(`Total tables found in DB: ${tablesResult.rows ? tablesResult.rows.length : 0}`);
         const tables = [];
         if (!tablesResult.rows) {
@@ -111,6 +128,7 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
         const totalTables = tablesData.length;
         reportProgress(0, totalTables, '开始加载表结构...', 'processing');
         for (let i = 0; i < tablesData.length; i++) {
+            checkAbort();
             const row = tablesData[i];
             const owner = row[0];
             const tableName = row[1];
@@ -120,7 +138,7 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
                 console.log(`Processing table ${i + 1}/${tablesData.length}: ${fullTableName}`);
                 reportProgress(i + 1, totalTables, fullTableName, 'processing');
             }
-            const columnsResult = await connection.execute(`
+            const columnsResult = await raceWithAbort(connection.execute(`
         SELECT
           col2.column_name,
           col2.data_type,
@@ -131,15 +149,15 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
         LEFT JOIN all_col_comments col ON col2.owner = col.owner AND col2.table_name = col.table_name AND col2.column_name = col.column_name
         WHERE col2.owner = :owner AND col2.table_name = :tableName
         ORDER BY col2.column_id
-      `, [owner, tableName]);
+      `, [owner, tableName]));
             const columns = [];
             const primaryKeys = new Set();
-            const pkResult = await connection.execute(`
+            const pkResult = await raceWithAbort(connection.execute(`
         SELECT col.column_name
         FROM all_constraints con
         JOIN all_cons_columns col ON con.owner = col.owner AND con.constraint_name = col.constraint_name
         WHERE con.owner = :owner AND con.table_name = :tableName AND con.constraint_type = 'P'
-      `, [owner, tableName]);
+      `, [owner, tableName]));
             for (const pkRow of pkResult.rows) {
                 primaryKeys.add(pkRow[0]);
             }
@@ -153,7 +171,7 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
                     isPrimaryKey: primaryKeys.has(colRow[0]),
                 });
             }
-            const indexesResult = await connection.execute(`
+            const indexesResult = await raceWithAbort(connection.execute(`
         SELECT
           ind.index_name,
           col.column_name,
@@ -162,7 +180,7 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
         FROM all_indexes ind
         JOIN all_ind_columns col ON ind.owner = col.index_owner AND ind.index_name = col.index_name
         WHERE ind.owner = :owner AND ind.table_name = :tableName AND ind.index_type != 'LOB'
-      `, [owner, tableName]);
+      `, [owner, tableName]));
             const indexes = [];
             for (const idxRow of indexesResult.rows) {
                 indexes.push({
@@ -172,21 +190,27 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
                     uniqueness: idxRow[3],
                 });
             }
-            const dataResult = await checkColumnData(connection, owner, tableName, columns);
+            const dataResult = await checkColumnData(connection, owner, tableName, columns, abortSignal);
+            let hasTableData = false;
             for (let j = 0; j < columns.length; j++) {
                 columns[j].hasData = dataResult[j]?.hasData || false;
                 columns[j].dataPercentage = dataResult[j]?.percentage || 0;
+                if (dataResult[j]?.hasData) {
+                    hasTableData = true;
+                }
                 if (dataResult[j]?.hasData && !columns[j].isPrimaryKey) {
                     columns[j].isUsed = true;
                 }
             }
-            tables.push({
-                tableName: fullTableName,
-                comments: tableComments,
-                columns,
-                indexes,
-                owner,
-            });
+            if (!filterEmptyTables || hasTableData) {
+                tables.push({
+                    tableName: fullTableName,
+                    comments: tableComments,
+                    columns,
+                    indexes,
+                    owner,
+                });
+            }
         }
         console.log(`Successfully loaded ${tables.length} tables`);
         reportProgress(totalTables, totalTables, `加载完成 (${tables.length} 个表)`, 'complete');
@@ -194,8 +218,14 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
         return tables;
     }
     catch (error) {
-        console.error('Error fetching Oracle tables:', error);
-        reportProgress(0, 0, `错误: ${error.message}`, 'error');
+        if (error.message === 'Operation cancelled') {
+            console.log('Schema load cancelled by user');
+            reportProgress(0, 0, '已取消', 'error');
+        }
+        else {
+            console.error('Error fetching Oracle tables:', error);
+            reportProgress(0, 0, `错误: ${error.message}`, 'error');
+        }
         if (connection) {
             try {
                 await connection.close();
@@ -206,14 +236,24 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
     }
 }
 const SAMPLE_SIZE = 1000;
-async function checkColumnData(connection, owner, tableName, columns) {
+async function checkColumnData(connection, owner, tableName, columns, abortSignal) {
     console.log('[checkColumnData] START:', owner, tableName, 'columns:', columns.length);
+    if (abortSignal?.aborted) {
+        throw new Error('Operation cancelled');
+    }
+    const abortPromise = abortSignal ? new Promise((_, reject) => {
+        const handler = () => reject(new Error('Operation cancelled'));
+        abortSignal.addEventListener('abort', handler, { once: true });
+    }) : null;
     try {
         const columnNames = columns.map(c => '"' + c.columnName + '"').join(', ');
         const sql = 'SELECT ' + columnNames + ' FROM "' + owner + '"."' + tableName + '" FETCH FIRST ' + SAMPLE_SIZE + ' ROWS ONLY';
-        const result = await connection.execute(sql, [], {
+        const executePromise = connection.execute(sql, [], {
             outFormat: oracledb_1.default.OUT_FORMAT_ARRAY,
         });
+        const result = abortPromise
+            ? await Promise.race([abortPromise, executePromise])
+            : await executePromise;
         const rows = (result.rows || []);
         const totalRows = rows.length;
         if (totalRows === 0) {
@@ -222,6 +262,9 @@ async function checkColumnData(connection, owner, tableName, columns) {
         }
         const columnResults = [];
         for (let colIndex = 0; colIndex < columns.length; colIndex++) {
+            if (abortSignal?.aborted) {
+                throw new Error('Operation cancelled');
+            }
             let nonNullCount = 0;
             for (const row of rows) {
                 if (row[colIndex] !== null && row[colIndex] !== undefined) {
@@ -238,6 +281,9 @@ async function checkColumnData(connection, owner, tableName, columns) {
         return columnResults;
     }
     catch (error) {
+        if (error.message === 'Operation cancelled') {
+            throw error;
+        }
         console.warn('[checkColumnData] ERROR:', owner, tableName, error);
         return columns.map(() => ({ hasData: false, percentage: 0 }));
     }

@@ -19,6 +19,8 @@ import {
 import { getOracleTables, executeOracleQuery, OracleConnectionParams } from '../database/oracle';
 import { getDamengTables, executeDamengQuery, DamengConnectionParams } from '../database/dameng';
 
+let schemaAbortController: AbortController | null = null;
+
 export function registerIpcHandlers() {
   ipcMain.handle('db:getDataSources', async () => {
     try {
@@ -153,13 +155,14 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache: boolean = true) => {
+  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache: boolean = true, filterEmptyTables: boolean = false) => {
     try {
       console.log('=== db:getSchema called ===');
       console.log('dataSourceId:', dataSourceId);
       console.log('ownerFilter (received):', ownerFilter);
       console.log('tableNamePattern (received):', tableNamePattern);
       console.log('useCache:', useCache);
+      console.log('filterEmptyTables:', filterEmptyTables);
       
       const ds = getDataSourceById(dataSourceId);
       if (!ds) {
@@ -168,7 +171,7 @@ export function registerIpcHandlers() {
       console.log('DataSource type:', ds.type);
       console.log('DataSource schema:', ds.schema);
 
-      const cacheKey = `${ownerFilter || ''}:${tableNamePattern || ''}`;
+      const cacheKey = `${ownerFilter || ''}:${tableNamePattern || ''}:${filterEmptyTables ? 'filterEmpty' : ''}`;
       
       if (useCache) {
         const cached = getSchemaCache(dataSourceId, cacheKey);
@@ -187,6 +190,9 @@ export function registerIpcHandlers() {
         }
       }
 
+      schemaAbortController = new AbortController();
+      const abortSignal = schemaAbortController.signal;
+
       const sendProgress = (progress: any) => {
         event.sender.send('schema:progress', progress);
       };
@@ -203,8 +209,8 @@ export function registerIpcHandlers() {
           password: ds.password,
           schema: ds.schema,
         };
-        console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern });
-        tables = await getOracleTables(params, sendProgress, ownerFilter, tableNamePattern);
+        console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern, filterEmptyTables });
+        tables = await getOracleTables(params, sendProgress, ownerFilter, tableNamePattern, abortSignal, filterEmptyTables);
         console.log(`Got ${tables.length} tables for Oracle`);
       } else if (ds.type === 'dameng') {
         const params: DamengConnectionParams = {
@@ -215,7 +221,7 @@ export function registerIpcHandlers() {
           password: ds.password,
         };
         console.log('Calling getDamengTables with tableNamePattern:', tableNamePattern);
-        tables = await getDamengTables(params, sendProgress, tableNamePattern);
+        tables = await getDamengTables(params, sendProgress, tableNamePattern, abortSignal, filterEmptyTables);
         console.log(`Got ${tables.length} tables for Dameng`);
       } else {
         throw new Error('不支持的数据库类型');
@@ -230,6 +236,43 @@ export function registerIpcHandlers() {
       return tables;
     } catch (error) {
       console.error('Error getting schema:', error);
+      throw error;
+    } finally {
+      schemaAbortController = null;
+    }
+  });
+
+  ipcMain.handle('db:getSchemaFromCache', async (_, dataSourceId: string) => {
+    try {
+      console.log('=== db:getSchemaFromCache called ===');
+      console.log('dataSourceId:', dataSourceId);
+      
+      const cache = getSchemaCache(dataSourceId, undefined, true);
+      if (cache) {
+        console.log('Found cached schema');
+        return cache.schemaData;
+      } else {
+        console.log('No cached schema found');
+        return [];
+      }
+    } catch (error) {
+      console.error('Error getting schema from cache:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:cancelSchemaLoad', async () => {
+    try {
+      console.log('=== db:cancelSchemaLoad called ===');
+      if (schemaAbortController) {
+        schemaAbortController.abort();
+        schemaAbortController = null;
+        console.log('Schema load cancelled');
+      } else {
+        console.log('No schema load in progress');
+      }
+    } catch (error) {
+      console.error('Error cancelling schema load:', error);
       throw error;
     }
   });

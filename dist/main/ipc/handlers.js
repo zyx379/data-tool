@@ -38,6 +38,7 @@ const electron_1 = require("electron");
 const sqlite_1 = require("../database/sqlite");
 const oracle_1 = require("../database/oracle");
 const dameng_1 = require("../database/dameng");
+let schemaAbortController = null;
 function registerIpcHandlers() {
     electron_1.ipcMain.handle('db:getDataSources', async () => {
         try {
@@ -173,20 +174,21 @@ function registerIpcHandlers() {
             throw error;
         }
     });
-    electron_1.ipcMain.handle('db:getSchema', async (event, dataSourceId, ownerFilter, tableNamePattern, useCache = true) => {
+    electron_1.ipcMain.handle('db:getSchema', async (event, dataSourceId, ownerFilter, tableNamePattern, useCache = true, filterEmptyTables = false) => {
         try {
             console.log('=== db:getSchema called ===');
             console.log('dataSourceId:', dataSourceId);
             console.log('ownerFilter (received):', ownerFilter);
             console.log('tableNamePattern (received):', tableNamePattern);
             console.log('useCache:', useCache);
+            console.log('filterEmptyTables:', filterEmptyTables);
             const ds = (0, sqlite_1.getDataSourceById)(dataSourceId);
             if (!ds) {
                 throw new Error('数据源不存在');
             }
             console.log('DataSource type:', ds.type);
             console.log('DataSource schema:', ds.schema);
-            const cacheKey = `${ownerFilter || ''}:${tableNamePattern || ''}`;
+            const cacheKey = `${ownerFilter || ''}:${tableNamePattern || ''}:${filterEmptyTables ? 'filterEmpty' : ''}`;
             if (useCache) {
                 const cached = (0, sqlite_1.getSchemaCache)(dataSourceId, cacheKey);
                 if (cached) {
@@ -204,6 +206,8 @@ function registerIpcHandlers() {
                     console.log('No cached schema found');
                 }
             }
+            schemaAbortController = new AbortController();
+            const abortSignal = schemaAbortController.signal;
             const sendProgress = (progress) => {
                 event.sender.send('schema:progress', progress);
             };
@@ -218,8 +222,8 @@ function registerIpcHandlers() {
                     password: ds.password,
                     schema: ds.schema,
                 };
-                console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern });
-                tables = await (0, oracle_1.getOracleTables)(params, sendProgress, ownerFilter, tableNamePattern);
+                console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern, filterEmptyTables });
+                tables = await (0, oracle_1.getOracleTables)(params, sendProgress, ownerFilter, tableNamePattern, abortSignal, filterEmptyTables);
                 console.log(`Got ${tables.length} tables for Oracle`);
             }
             else if (ds.type === 'dameng') {
@@ -231,7 +235,7 @@ function registerIpcHandlers() {
                     password: ds.password,
                 };
                 console.log('Calling getDamengTables with tableNamePattern:', tableNamePattern);
-                tables = await (0, dameng_1.getDamengTables)(params, sendProgress, tableNamePattern);
+                tables = await (0, dameng_1.getDamengTables)(params, sendProgress, tableNamePattern, abortSignal, filterEmptyTables);
                 console.log(`Got ${tables.length} tables for Dameng`);
             }
             else {
@@ -246,6 +250,45 @@ function registerIpcHandlers() {
         }
         catch (error) {
             console.error('Error getting schema:', error);
+            throw error;
+        }
+        finally {
+            schemaAbortController = null;
+        }
+    });
+    electron_1.ipcMain.handle('db:getSchemaFromCache', async (_, dataSourceId) => {
+        try {
+            console.log('=== db:getSchemaFromCache called ===');
+            console.log('dataSourceId:', dataSourceId);
+            const cache = (0, sqlite_1.getSchemaCache)(dataSourceId, undefined, true);
+            if (cache) {
+                console.log('Found cached schema');
+                return cache.schemaData;
+            }
+            else {
+                console.log('No cached schema found');
+                return [];
+            }
+        }
+        catch (error) {
+            console.error('Error getting schema from cache:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('db:cancelSchemaLoad', async () => {
+        try {
+            console.log('=== db:cancelSchemaLoad called ===');
+            if (schemaAbortController) {
+                schemaAbortController.abort();
+                schemaAbortController = null;
+                console.log('Schema load cancelled');
+            }
+            else {
+                console.log('No schema load in progress');
+            }
+        }
+        catch (error) {
+            console.error('Error cancelling schema load:', error);
             throw error;
         }
     });

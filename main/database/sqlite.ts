@@ -313,32 +313,71 @@ export function clearQueryHistory() {
 
 export const SCHEMA_CACHE_VERSION = 'v2';
 
-export function getSchemaCache(dataSourceId: string, filterPattern?: string): any | undefined {
+export function getSchemaCache(dataSourceId: string, filterPattern?: string, matchAnyFilter: boolean = false): any | undefined {
   const database = getDb();
-  const stmt = database.prepare(
-    'SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) AND version = ? ORDER BY cachedAt DESC LIMIT 1'
-  );
-  const bindFilter = filterPattern || null; stmt.bind([dataSourceId, bindFilter, bindFilter, SCHEMA_CACHE_VERSION]);
+  
+  let query: string;
+  let params: any[];
+  
+  if (matchAnyFilter) {
+    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND version = ? ORDER BY cachedAt DESC';
+    params = [dataSourceId, SCHEMA_CACHE_VERSION];
+  } else {
+    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) AND version = ? ORDER BY cachedAt DESC LIMIT 1';
+    const bindFilter = filterPattern || null;
+    params = [dataSourceId, bindFilter, bindFilter, SCHEMA_CACHE_VERSION];
+  }
+  
+  const stmt = database.prepare(query);
+  stmt.bind(params);
 
-  if (stmt.step()) {
+  const results: any[] = [];
+  while (stmt.step()) {
     const row = stmt.get();
-    stmt.free();
     try {
-      return {
+      results.push({
         id: row[0] as string,
         dataSourceId: row[1] as string,
         schemaData: JSON.parse(row[2] as string),
         filterPattern: row[3] as string | null,
         cachedAt: row[4] as string,
         version: row[5] as string,
-      };
+      });
     } catch {
-      return undefined;
+      // skip invalid JSON
     }
   }
-
+  
   stmt.free();
-  return undefined;
+  
+  if (results.length === 0) {
+    return undefined;
+  }
+  
+  if (!matchAnyFilter || results.length === 1) {
+    return results[0];
+  }
+  
+  const mergedSchemaData: any[] = [];
+  const seenTables = new Set<string>();
+  
+  for (const result of results) {
+    for (const table of result.schemaData) {
+      if (!seenTables.has(table.tableName)) {
+        seenTables.add(table.tableName);
+        mergedSchemaData.push(table);
+      }
+    }
+  }
+  
+  return {
+    id: results[0].id,
+    dataSourceId: results[0].dataSourceId,
+    schemaData: mergedSchemaData,
+    filterPattern: null,
+    cachedAt: results[0].cachedAt,
+    version: results[0].version,
+  };
 }
 
 export function setSchemaCache(dataSourceId: string, schemaData: any[], filterPattern?: string) {

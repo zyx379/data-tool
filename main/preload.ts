@@ -17,9 +17,11 @@ export interface ElectronAPI {
   testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
   getQueryHistory: () => Promise<any[]>;
   clearQueryHistory: () => Promise<void>;
-  getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean) => Promise<any[]>;
+  getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean, filterEmptyTables?: boolean) => Promise<any[]>;
+  getSchemaFromCache: (dataSourceId: string) => Promise<any[]>;
   executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
   onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
+  cancelSchemaLoad: () => Promise<void>;
 }
 
 const api: ElectronAPI = {
@@ -32,13 +34,15 @@ const api: ElectronAPI = {
   testConnection: (ds) => ipcRenderer.invoke('db:testConnection', ds),
   getQueryHistory: () => ipcRenderer.invoke('db:getQueryHistory'),
   clearQueryHistory: () => ipcRenderer.invoke('db:clearQueryHistory'),
-  getSchema: (dataSourceId, ownerFilter, tableNamePattern, useCache = true) => ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern, useCache),
+  getSchema: (dataSourceId, ownerFilter, tableNamePattern, useCache = true, filterEmptyTables = false) => ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern, useCache, filterEmptyTables),
+  getSchemaFromCache: (dataSourceId) => ipcRenderer.invoke('db:getSchemaFromCache', dataSourceId),
   executeQuery: (dataSourceId, sql) => ipcRenderer.invoke('db:executeQuery', dataSourceId, sql),
   onSchemaProgress: (callback) => {
     const handler = (_: any, progress: SchemaProgress) => callback(progress);
     ipcRenderer.on('schema:progress', handler);
     return () => ipcRenderer.removeListener('schema:progress', handler);
   },
+  cancelSchemaLoad: () => ipcRenderer.invoke('db:cancelSchemaLoad'),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

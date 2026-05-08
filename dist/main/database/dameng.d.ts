@@ -33,7 +33,7 @@ export declare function testDamengConnection(params: DamengConnectionParams): Pr
     success: boolean;
     message: string;
 }>;
-export declare function getDamengTables(params: DamengConnectionParams, onProgress?: ProgressCallback, tableNamePattern?: string): Promise<TableInfo[]>;
+export declare function getDamengTables(params: DamengConnectionParams, onProgress?: ProgressCallback, tableNamePattern?: string, abortSignal?: AbortSignal, filterEmptyTables?: boolean): Promise<TableInfo[]>;
 export declare function executeDamengQuery(params: DamengConnectionParams, sql: string): Promise<{
     columns: string[];
     rows: any[][];

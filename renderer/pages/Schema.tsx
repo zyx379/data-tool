@@ -147,6 +147,7 @@ function Schema() {
     schemaError,
     loadDataSources,
     loadSchema,
+    loadSchemaFromCache,
     setActiveDataSource,
     refreshSchema,
     refreshSchemaWithMerge,
@@ -157,6 +158,8 @@ function Schema() {
     addSchemaFilterHistory,
     schemaProgress,
     setSchemaProgress,
+    filterEmptyTables,
+    setFilterEmptyTables,
     toggleFieldUsed,
     getUsedFields,
     setShowOnlyUsedFieldsByTable,
@@ -187,9 +190,9 @@ function Schema() {
 
   useEffect(() => {
     if (activeDataSource?.id && schema.length === 0) {
-      loadSchema(activeDataSource.id, true);
+      loadSchemaFromCache(activeDataSource.id);
     }
-  }, [activeDataSource, schema.length, loadSchema]);
+  }, [activeDataSource, schema.length, loadSchemaFromCache]);
 
   useEffect(() => {
     setHasAutoAddedDefaultFields(false);
@@ -1184,6 +1187,15 @@ function Schema() {
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-3"
                 autoFocus
               />
+              <label className="flex items-center space-x-2 cursor-pointer mb-3">
+                <input
+                  type="checkbox"
+                  checked={filterEmptyTables}
+                  onChange={(e) => setFilterEmptyTables(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-sm text-slate-600">过滤表数据为空的表格</span>
+              </label>
               {schemaFilterHistory.length > 0 && (
                 <div className="mb-3">
                   <label className="block text-xs text-slate-500 mb-2">历史记录</label>

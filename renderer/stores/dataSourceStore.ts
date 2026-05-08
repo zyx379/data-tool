@@ -84,6 +84,7 @@ interface DataSourceStore {
   schemaFilterHistory: string[];
   abortController: AbortController | null;
   schemaProgress: SchemaProgress | null;
+  filterEmptyTables: boolean;
   savedQueryConditionTemplates: SavedQueryConditionTemplate[];
   loadDataSources: () => Promise<void>;
   createDataSource: (ds: Omit<DataSource, 'id'>) => Promise<DataSource>;
@@ -91,7 +92,8 @@ interface DataSourceStore {
   deleteDataSource: (id: string) => Promise<void>;
   setActiveDataSource: (id: string) => Promise<void>;
   testConnection: (ds: DataSource) => Promise<{ success: boolean; message: string }>;
-  loadSchema: (dataSourceId: string, useCache?: boolean) => Promise<void>;
+  loadSchema: (dataSourceId: string, useCache?: boolean, mergeWithExisting?: boolean, filterEmptyTables?: boolean) => Promise<void>;
+  loadSchemaFromCache: (dataSourceId: string) => Promise<boolean>;
   refreshSchema: () => Promise<void>;
   refreshSchemaWithMerge: () => Promise<void>;
   cancelSchemaLoad: () => void;
@@ -99,6 +101,7 @@ interface DataSourceStore {
   setSchemaFilterPattern: (pattern: string) => void;
   addSchemaFilterHistory: (pattern: string) => void;
   setSchemaProgress: (progress: SchemaProgress | null) => void;
+  setFilterEmptyTables: (value: boolean) => void;
   setFilterRules: (rules: string[]) => void;
   toggleFieldUsed: (dataSourceId: string, tableName: string, columnName: string, used: boolean) => void;
   getUsedFields: (dataSourceId: string, tableName: string) => Set<string>;
@@ -124,9 +127,11 @@ declare global {
       testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
       getQueryHistory: () => Promise<any[]>;
       clearQueryHistory: () => Promise<void>;
-      getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean) => Promise<TableInfo[]>;
+      getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean, filterEmptyTables?: boolean) => Promise<TableInfo[]>;
+      getSchemaFromCache: (dataSourceId: string) => Promise<TableInfo[]>;
       executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
       onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
+      cancelSchemaLoad: () => Promise<void>;
     };
   }
 }
@@ -151,6 +156,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       schemaFilterHistory: [],
       abortController: null,
       schemaProgress: null,
+      filterEmptyTables: false,
       savedQueryConditionTemplates: [],
 
       loadDataSources: async () => {
@@ -189,81 +195,110 @@ export const useDataSourceStore = create<DataSourceStore>()(
         return await window.electronAPI.testConnection(ds);
       },
 
-      loadSchema: async (dataSourceId, useCache = true, mergeWithExisting = false) => {
-        const controller = new AbortController();
-        set({ schemaLoading: true, schemaError: null, abortController: controller });
+      loadSchema: async (dataSourceId, useCache = true, mergeWithExisting = false, filterEmptyTables = false) => {
+      const controller = new AbortController();
+      const currentSchema = [...get().schema];
+      set({ schemaLoading: true, schemaError: null, abortController: controller });
 
-        try {
-          const { schemaFilterPattern } = get();
+      try {
+        const { schemaFilterPattern } = get();
 
-          let ownerFilter: string | undefined;
-          let tableNamePattern: string | undefined;
+        let ownerFilter: string | undefined;
+        let tableNamePattern: string | undefined;
+        
+        if (schemaFilterPattern) {
+          const ownerMatch = schemaFilterPattern.match(/^([A-Za-z0-9_]+)\.(.+)$/);
+          if (ownerMatch) {
+            ownerFilter = ownerMatch[1].toUpperCase();
+            tableNamePattern = ownerMatch[2];
+          } else {
+            tableNamePattern = schemaFilterPattern;
+          }
+        }
+
+        const schema = await window.electronAPI.getSchema(dataSourceId, ownerFilter, tableNamePattern, useCache, filterEmptyTables);
+
+        if (controller.signal.aborted) {
+          set({ schema: currentSchema, schemaLoading: false, abortController: null });
+          return;
+        }
+
+        let filteredSchema = schema;
+        if (schemaFilterPattern) {
+          try {
+            const regex = new RegExp(schemaFilterPattern);
+            filteredSchema = schema.filter(t => {
+              if (regex.test(t.tableName)) {
+                return true;
+              }
+              const tableNameOnly = t.tableName.split('.').pop() || t.tableName;
+              return regex.test(tableNameOnly);
+            });
+          } catch (e) {
+            // invalid regex, load all tables
+          }
+        }
+
+        const processedSchema = filteredSchema.map(table => ({
+          ...table,
+          columns: table.columns.map(col => ({
+            ...col,
+            isUsed: col.isUsed ?? (col.hasData && !col.isPrimaryKey),
+          })),
+        }));
+
+        set((state) => {
+          let mergedTables = processedSchema;
           
-          if (schemaFilterPattern) {
-            const ownerMatch = schemaFilterPattern.match(/^([A-Za-z0-9_]+)\.(.+)$/);
-            if (ownerMatch) {
-              ownerFilter = ownerMatch[1].toUpperCase();
-              tableNamePattern = ownerMatch[2];
-            } else {
-              tableNamePattern = schemaFilterPattern;
-            }
+          if (mergeWithExisting && state.schema.length > 0) {
+            const existingTableNames = new Set(state.schema.map(t => t.tableName));
+            const newTables = processedSchema.filter(t => !existingTableNames.has(t.tableName));
+            mergedTables = [...state.schema, ...newTables];
           }
 
-          const schema = await window.electronAPI.getSchema(dataSourceId, ownerFilter, tableNamePattern, useCache);
+          return {
+            schema: mergedTables,
+            schemaLoading: false,
+            abortController: null,
+            lastSchemaUpdate: new Date(),
+          };
+        });
+      } catch (error) {
+        if ((error as Error).message === 'Operation cancelled' || controller.signal.aborted) {
+          set({ schema: currentSchema, schemaLoading: false, abortController: null });
+          return;
+        }
+        console.error('Failed to load schema:', error);
+        set({ schema: currentSchema, schemaLoading: false, schemaError: (error as Error).message, abortController: null });
+      }
+    },
 
-          if (controller.signal.aborted) {
-            return;
-          }
-
-          let filteredSchema = schema;
-          if (schemaFilterPattern) {
-            try {
-              const regex = new RegExp(schemaFilterPattern);
-              filteredSchema = schema.filter(t => {
-                if (regex.test(t.tableName)) {
-                  return true;
-                }
-                const tableNameOnly = t.tableName.split('.').pop() || t.tableName;
-                return regex.test(tableNameOnly);
-              });
-            } catch (e) {
-              // invalid regex, load all tables
-            }
-          }
-
-          const processedSchema = filteredSchema.map(table => ({
+    loadSchemaFromCache: async (dataSourceId: string) => {
+      try {
+        const schema = await window.electronAPI.getSchemaFromCache(dataSourceId);
+        if (schema.length > 0) {
+          const processedSchema = schema.map(table => ({
             ...table,
             columns: table.columns.map(col => ({
               ...col,
               isUsed: col.isUsed ?? (col.hasData && !col.isPrimaryKey),
             })),
           }));
-
-          set((state) => {
-            let mergedTables = processedSchema;
-            
-            if (mergeWithExisting && state.schema.length > 0) {
-              const existingTableNames = new Set(state.schema.map(t => t.tableName));
-              const newTables = processedSchema.filter(t => !existingTableNames.has(t.tableName));
-              mergedTables = [...state.schema, ...newTables];
-            }
-
-            return {
-              schema: mergedTables,
-              schemaLoading: false,
-              abortController: null,
-              lastSchemaUpdate: new Date(),
-            };
+          set({
+            schema: processedSchema,
+            schemaLoading: false,
+            schemaError: null,
+            lastSchemaUpdate: new Date(),
+            schemaFilterPattern: '',
           });
-        } catch (error) {
-          if (controller.signal.aborted) {
-            set({ schemaLoading: false, abortController: null });
-            return;
-          }
-          console.error('Failed to load schema:', error);
-          set({ schemaLoading: false, schemaError: (error as Error).message, abortController: null });
+          return true;
         }
-      },
+        return false;
+      } catch (error) {
+        console.error('Error loading schema from cache:', error);
+        return false;
+      }
+    },
 
       removeTable: (tableName: string) => {
         set((state) => ({
@@ -272,26 +307,31 @@ export const useDataSourceStore = create<DataSourceStore>()(
       },
 
       refreshSchema: async () => {
-        const { activeDataSource } = get();
+        const { activeDataSource, filterEmptyTables } = get();
         if (activeDataSource?.id) {
-          await get().loadSchema(activeDataSource.id, false);
+          await get().loadSchema(activeDataSource.id, false, false, filterEmptyTables);
         }
       },
 
       refreshSchemaWithMerge: async () => {
-        const { activeDataSource } = get();
+        const { activeDataSource, filterEmptyTables } = get();
         if (activeDataSource?.id) {
-          await get().loadSchema(activeDataSource.id, false, true);
+          await get().loadSchema(activeDataSource.id, false, true, filterEmptyTables);
         }
       },
 
-      cancelSchemaLoad: () => {
-        const { abortController } = get();
-        if (abortController) {
-          abortController.abort();
-          set({ schemaLoading: false, abortController: null });
-        }
-      },
+      cancelSchemaLoad: async () => {
+      const { abortController } = get();
+      if (abortController) {
+        abortController.abort();
+      }
+      try {
+        await window.electronAPI.cancelSchemaLoad();
+      } catch (error) {
+        console.error('Error cancelling schema load:', error);
+      }
+      set({ schemaLoading: false, abortController: null });
+    },
 
       setSchemaFilterPattern: (pattern) => {
         set({ schemaFilterPattern: pattern });
@@ -306,8 +346,12 @@ export const useDataSourceStore = create<DataSourceStore>()(
       },
 
       setSchemaProgress: (progress) => {
-        set({ schemaProgress: progress });
-      },
+      set({ schemaProgress: progress });
+    },
+
+    setFilterEmptyTables: (value) => {
+      set({ filterEmptyTables: value });
+    },
 
       setFilterRules: (rules) => {
         set({ filterRules: rules });
