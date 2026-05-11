@@ -4,17 +4,19 @@ import fs from 'fs';
 import { initDatabase, closeDatabase } from './database/sqlite';
 import { registerIpcHandlers } from './ipc/handlers';
 
-const logDir = path.join(app.getPath('userData'), 'logs');
-const logPath = path.join(logDir, 'main.log');
+let logDir: string;
+let logPath: string;
 
 function log(msg: string) {
   const timestamp = new Date().toISOString();
   const line = `[${timestamp}] [info] ${msg}\n`;
   try {
-    if (!fs.existsSync(logDir)) {
+    if (logDir && !fs.existsSync(logDir)) {
       fs.mkdirSync(logDir, { recursive: true });
     }
-    fs.appendFileSync(logPath, line);
+    if (logPath) {
+      fs.appendFileSync(logPath, line);
+    }
   } catch (e) {
     console.error('Failed to write log:', e);
   }
@@ -119,6 +121,9 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  logDir = path.join(app.getPath('userData'), 'logs');
+  logPath = path.join(logDir, 'main.log');
+  
   log('App ready');
 
   createMenu();

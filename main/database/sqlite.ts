@@ -9,6 +9,7 @@ const ENCRYPTION_KEY = 'zoehis-helper-encryption-key-v1';
 
 export interface DataSourceRecord {
   id: string;
+  projectId: string;
   name: string;
   type: 'oracle' | 'dameng';
   host: string;
@@ -18,7 +19,30 @@ export interface DataSourceRecord {
   schema?: string;
   username: string;
   password: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  description?: string;
   isActive: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectConfigRecord {
+  id: string;
+  projectId: string;
+  apiBaseUrl?: string;
+  apiTokenPath?: string;
+  apiVersionPath?: string;
+  apiLogPath?: string;
+  redisHost?: string;
+  redisPort?: number;
+  redisPassword?: string;
+  redisDb?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -52,6 +76,73 @@ export async function initDatabase() {
       const buffer = fs.readFileSync(dbPath);
       db = new SQL.Database(buffer);
       console.log('Loaded existing database');
+      
+      // 检查 data_sources 表是否有 projectId 列
+      try {
+        const result = db.exec("PRAGMA table_info(data_sources)");
+        if (result.length > 0) {
+          const columns = result[0].values.map(col => col[1] as string);
+          if (!columns.includes('projectId')) {
+            console.log('Migrating data_sources table to new schema...');
+            // 保存 schema_cache 数据
+            let schemaCacheData: any[] = [];
+            try {
+              const cacheResult = db.exec("SELECT * FROM schema_cache");
+              if (cacheResult.length > 0) {
+                schemaCacheData = cacheResult[0].values;
+              }
+              console.log('Saved', schemaCacheData.length, 'schema cache records to preserve');
+            } catch (e) {
+              console.log('No schema_cache table or data to preserve');
+            }
+            
+            // 删除旧表
+            db.run("DROP TABLE IF EXISTS data_sources");
+            
+            // 创建新表
+            db.run(`
+              CREATE TABLE data_sources (
+                id TEXT PRIMARY KEY,
+                projectId TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                sid TEXT,
+                serviceName TEXT,
+                schema TEXT,
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                createdAt TEXT NOT NULL,
+                updatedAt TEXT NOT NULL,
+                FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+              )
+            `);
+            
+            // 恢复 schema_cache 数据
+            if (schemaCacheData.length > 0) {
+              console.log('Restoring', schemaCacheData.length, 'schema cache records...');
+              // 不指定列名，因为旧数据可能有不同的列结构
+              for (const row of schemaCacheData) {
+                try {
+                  const stmt = db.prepare('INSERT INTO schema_cache (id, dataSourceId, schemaData, filterPattern, cachedAt) VALUES (?, ?, ?, ?, ?)');
+                  // 只取前5列，忽略可能存在的 version 列
+                  stmt.run([row[0], row[1], row[2], row[3], row[4]]);
+                  stmt.free();
+                } catch (e) {
+                  console.log('Error restoring cache record, skipping:', e);
+                }
+              }
+            }
+            
+            // 保存数据库
+            saveDatabase();
+            console.log('Migration completed');
+          }
+        }
+      } catch (checkError) {
+        console.log('Error checking/migrating table structure:', checkError);
+      }
     } catch (e) {
       console.log('Failed to load existing database, creating new one');
       db = new SQL.Database();
@@ -61,9 +152,14 @@ export async function initDatabase() {
     console.log('Created new database');
   }
 
+  if (!db) {
+    db = new SQL.Database();
+  }
+
   db.run(`
     CREATE TABLE IF NOT EXISTS data_sources (
       id TEXT PRIMARY KEY,
+      projectId TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       type TEXT NOT NULL,
       host TEXT NOT NULL,
@@ -73,9 +169,9 @@ export async function initDatabase() {
       schema TEXT,
       username TEXT NOT NULL,
       password TEXT NOT NULL,
-      isActive INTEGER DEFAULT 0,
       createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL
+      updatedAt TEXT NOT NULL,
+      FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
     )
   `);
 
@@ -98,7 +194,6 @@ export async function initDatabase() {
       schemaData TEXT NOT NULL,
       filterPattern TEXT,
       cachedAt TEXT NOT NULL,
-      version TEXT NOT NULL,
       FOREIGN KEY (dataSourceId) REFERENCES data_sources(id) ON DELETE CASCADE
     )
   `);
@@ -110,6 +205,52 @@ export async function initDatabase() {
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_schema_cache_dataSourceId_filter ON schema_cache(dataSourceId, filterPattern)
   `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      isActive INTEGER DEFAULT 0,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    )
+  `);
+
+
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS project_configs (
+      id TEXT PRIMARY KEY,
+      projectId TEXT NOT NULL UNIQUE,
+      apiBaseUrl TEXT,
+      apiTokenPath TEXT,
+      apiVersionPath TEXT,
+      apiLogPath TEXT,
+      redisHost TEXT,
+      redisPort INTEGER,
+      redisPassword TEXT,
+      redisDb INTEGER,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+
+  // 调试：查询现有 schema_cache
+  try {
+    const result = db.exec('SELECT dataSourceId, filterPattern, cachedAt FROM schema_cache ORDER BY cachedAt DESC');
+    if (result.length > 0 && result[0].values.length > 0) {
+      console.log('[DEBUG] Existing schema_cache entries:');
+      result[0].values.forEach((row, index) => {
+        console.log(`[DEBUG]   ${index + 1}: dataSourceId=${row[0]}, filterPattern=${row[1]}, cachedAt=${row[2]}`);
+      });
+    } else {
+      console.log('[DEBUG] No existing schema_cache entries found');
+    }
+  } catch (e) {
+    console.log('[DEBUG] Error checking schema_cache:', e);
+  }
 
   saveDatabase();
   console.log('Database initialized successfully');
@@ -151,16 +292,16 @@ export function getAllDataSources(): DataSourceRecord[] {
 
   return results[0].values.map((row) => ({
     id: row[0] as string,
-    name: row[1] as string,
-    type: row[2] as 'oracle' | 'dameng',
-    host: row[3] as string,
-    port: row[4] as number,
-    sid: row[5] as string | undefined,
-    serviceName: row[6] as string | undefined,
-    schema: row[7] as string | undefined,
-    username: row[8] as string,
-    password: decryptPassword(row[9] as string),
-    isActive: row[10] as number,
+    projectId: row[1] as string,
+    name: row[2] as string,
+    type: row[3] as 'oracle' | 'dameng',
+    host: row[4] as string,
+    port: row[5] as number,
+    sid: row[6] as string | undefined,
+    serviceName: row[7] as string | undefined,
+    schema: row[8] as string | undefined,
+    username: row[9] as string,
+    password: decryptPassword(row[10] as string),
     createdAt: row[11] as string,
     updatedAt: row[12] as string,
   }));
@@ -176,16 +317,16 @@ export function getDataSourceById(id: string): DataSourceRecord | undefined {
     stmt.free();
     return {
       id: row[0] as string,
-      name: row[1] as string,
-      type: row[2] as 'oracle' | 'dameng',
-      host: row[3] as string,
-      port: row[4] as number,
-      sid: row[5] as string | undefined,
-      serviceName: row[6] as string | undefined,
-      schema: row[7] as string | undefined,
-      username: row[8] as string,
-      password: decryptPassword(row[9] as string),
-      isActive: row[10] as number,
+      projectId: row[1] as string,
+      name: row[2] as string,
+      type: row[3] as 'oracle' | 'dameng',
+      host: row[4] as string,
+      port: row[5] as number,
+      sid: row[6] as string | undefined,
+      serviceName: row[7] as string | undefined,
+      schema: row[8] as string | undefined,
+      username: row[9] as string,
+      password: decryptPassword(row[10] as string),
       createdAt: row[11] as string,
       updatedAt: row[12] as string,
     };
@@ -202,9 +343,9 @@ export function createDataSource(ds: Omit<DataSourceRecord, 'id' | 'createdAt' |
   const encryptedPassword = encryptPassword(ds.password);
 
   database.run(
-    `INSERT INTO data_sources (id, name, type, host, port, sid, serviceName, schema, username, password, isActive, createdAt, updatedAt)
+    `INSERT INTO data_sources (id, projectId, name, type, host, port, sid, serviceName, schema, username, password, createdAt, updatedAt)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, ds.name, ds.type, ds.host, ds.port, ds.sid || null, ds.serviceName || null, ds.schema || null, ds.username, encryptedPassword, ds.isActive || 0, now, now]
+    [id, ds.projectId, ds.name, ds.type, ds.host, ds.port, ds.sid || null, ds.serviceName || null, ds.schema || null, ds.username, encryptedPassword, now, now]
   );
 
   saveDatabase();
@@ -233,8 +374,8 @@ export function updateDataSource(id: string, ds: Partial<DataSourceRecord>): Dat
   const encryptedPassword = encryptPassword(updated.password);
 
   database.run(
-    `UPDATE data_sources SET name = ?, type = ?, host = ?, port = ?, sid = ?, serviceName = ?, schema = ?, username = ?, password = ?, isActive = ?, updatedAt = ? WHERE id = ?`,
-    [updated.name, updated.type, updated.host, updated.port, updated.sid || null, updated.serviceName || null, updated.schema || null, updated.username, encryptedPassword, updated.isActive, now, id]
+    `UPDATE data_sources SET projectId = ?, name = ?, type = ?, host = ?, port = ?, sid = ?, serviceName = ?, schema = ?, username = ?, password = ?, updatedAt = ? WHERE id = ?`,
+    [updated.projectId, updated.name, updated.type, updated.host, updated.port, updated.sid || null, updated.serviceName || null, updated.schema || null, updated.username, encryptedPassword, now, id]
   );
 
   saveDatabase();
@@ -247,34 +388,39 @@ export function deleteDataSource(id: string) {
   saveDatabase();
 }
 
-export function setActiveDataSource(id: string) {
+export function getDataSourceByProjectId(projectId: string): DataSourceRecord | undefined {
   const database = getDb();
-  database.run('UPDATE data_sources SET isActive = 0');
-  database.run('UPDATE data_sources SET isActive = 1 WHERE id = ?', [id]);
-  saveDatabase();
+  const stmt = database.prepare('SELECT * FROM data_sources WHERE projectId = ?');
+  stmt.bind([projectId]);
+
+  if (stmt.step()) {
+    const row = stmt.get();
+    stmt.free();
+    return {
+      id: row[0] as string,
+      projectId: row[1] as string,
+      name: row[2] as string,
+      type: row[3] as 'oracle' | 'dameng',
+      host: row[4] as string,
+      port: row[5] as number,
+      sid: row[6] as string | undefined,
+      serviceName: row[7] as string | undefined,
+      schema: row[8] as string | undefined,
+      username: row[9] as string,
+      password: decryptPassword(row[10] as string),
+      createdAt: row[11] as string,
+      updatedAt: row[12] as string,
+    };
+  }
+
+  stmt.free();
+  return undefined;
 }
 
 export function getActiveDataSource(): DataSourceRecord | undefined {
-  const database = getDb();
-  const results = database.exec('SELECT * FROM data_sources WHERE isActive = 1');
-  if (results.length === 0 || results[0].values.length === 0) return undefined;
-
-  const row = results[0].values[0];
-  return {
-    id: row[0] as string,
-    name: row[1] as string,
-    type: row[2] as 'oracle' | 'dameng',
-    host: row[3] as string,
-    port: row[4] as number,
-    sid: row[5] as string | undefined,
-    serviceName: row[6] as string | undefined,
-    schema: row[7] as string | undefined,
-    username: row[8] as string,
-    password: decryptPassword(row[9] as string),
-    isActive: row[10] as number,
-    createdAt: row[11] as string,
-    updatedAt: row[12] as string,
-  };
+  const project = getActiveProject();
+  if (!project) return undefined;
+  return getDataSourceByProjectId(project.id);
 }
 
 export function getQueryHistory(limit: number = 100): any[] {
@@ -311,27 +457,33 @@ export function clearQueryHistory() {
   saveDatabase();
 }
 
-export const SCHEMA_CACHE_VERSION = 'v2';
-
 export function getSchemaCache(dataSourceId: string, filterPattern?: string, matchAnyFilter: boolean = false): any | undefined {
+  console.log('[DEBUG] getSchemaCache called with:');
+  console.log('[DEBUG]   dataSourceId:', dataSourceId);
+  console.log('[DEBUG]   filterPattern:', filterPattern);
+  console.log('[DEBUG]   matchAnyFilter:', matchAnyFilter);
+
   const database = getDb();
 
   let query: string;
   let params: any[];
+  const results: any[] = [];
 
   if (matchAnyFilter) {
-    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND version = ? ORDER BY cachedAt DESC';
-    params = [dataSourceId, SCHEMA_CACHE_VERSION];
+    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? ORDER BY cachedAt DESC';
+    params = [dataSourceId];
   } else {
-    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) AND version = ? ORDER BY cachedAt DESC LIMIT 1';
+    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) ORDER BY cachedAt DESC LIMIT 1';
     const bindFilter = filterPattern || null;
-    params = [dataSourceId, bindFilter, bindFilter, SCHEMA_CACHE_VERSION];
+    params = [dataSourceId, bindFilter, bindFilter];
   }
+
+  console.log('[DEBUG] Query:', query);
+  console.log('[DEBUG] Params:', params);
 
   const stmt = database.prepare(query);
   stmt.bind(params);
 
-  const results: any[] = [];
   while (stmt.step()) {
     const row = stmt.get();
     try {
@@ -341,27 +493,32 @@ export function getSchemaCache(dataSourceId: string, filterPattern?: string, mat
         schemaData: JSON.parse(row[2] as string),
         filterPattern: row[3] as string | null,
         cachedAt: row[4] as string,
-        version: row[5] as string,
       });
-    } catch {
-      // skip invalid JSON
+    } catch (e) {
+      console.error('[DEBUG] Error parsing schemaData JSON:', e);
     }
   }
 
   stmt.free();
 
+  console.log('[DEBUG] Found', results.length, 'cache results');
+
   if (results.length === 0) {
+    console.log('[DEBUG] No cache results found, returning undefined');
     return undefined;
   }
 
   if (!matchAnyFilter || results.length === 1) {
+    console.log('[DEBUG] Returning single result with', results[0].schemaData?.length, 'tables');
     return results[0];
   }
 
+  console.log('[DEBUG] Merging multiple cache results');
   const mergedSchemaData: any[] = [];
   const seenTables = new Set<string>();
 
   for (const result of results) {
+    console.log('[DEBUG] Processing result with', result.schemaData?.length, 'tables');
     for (const table of result.schemaData) {
       if (!seenTables.has(table.tableName)) {
         seenTables.add(table.tableName);
@@ -370,29 +527,44 @@ export function getSchemaCache(dataSourceId: string, filterPattern?: string, mat
     }
   }
 
+  console.log('[DEBUG] Merged result has', mergedSchemaData.length, 'unique tables');
   return {
     id: results[0].id,
     dataSourceId: results[0].dataSourceId,
     schemaData: mergedSchemaData,
     filterPattern: null,
     cachedAt: results[0].cachedAt,
-    version: results[0].version,
   };
 }
 
 export function setSchemaCache(dataSourceId: string, schemaData: any[], filterPattern?: string) {
+  console.log('[DEBUG] ========== setSchemaCache START ==========');
+  console.log('[DEBUG] dataSourceId:', dataSourceId);
+  console.log('[DEBUG] schemaData.length:', schemaData.length);
+  console.log('[DEBUG] filterPattern:', filterPattern);
+  
   const database = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
   const schemaJson = JSON.stringify(schemaData);
 
+  // 先删除相同 dataSourceId 和 filterPattern 的旧缓存
+  console.log('[DEBUG] Deleting old cache entries...');
+  database.run(
+    'DELETE FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL))',
+    [dataSourceId, filterPattern || null, filterPattern || null]
+  );
+
+  console.log('[DEBUG] Inserting new cache with id:', id);
   database.run(
     `INSERT INTO schema_cache (id, dataSourceId, schemaData, filterPattern, cachedAt, version)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, dataSourceId, schemaJson, filterPattern || null, now, SCHEMA_CACHE_VERSION]
+    [id, dataSourceId, schemaJson, filterPattern || null, now, 'v2']
   );
 
+  console.log('[DEBUG] Calling saveDatabase()...');
   saveDatabase();
+  console.log('[DEBUG] ========== setSchemaCache COMPLETE ==========');
   return { id, cachedAt: now };
 }
 
@@ -447,4 +619,231 @@ export function removeTablesFromSchemaCache(dataSourceId: string, tableNames: st
   if (filteredSchema.length > 0) {
     setSchemaCache(dataSourceId, filteredSchema, undefined);
   }
+}
+
+export function getAllProjects(): ProjectRecord[] {
+  const database = getDb();
+  const results = database.exec('SELECT * FROM projects ORDER BY createdAt DESC');
+  if (results.length === 0 || results[0].values.length === 0) return [];
+
+  return results[0].values.map((row) => ({
+    id: row[0] as string,
+    name: row[1] as string,
+    description: row[2] as string | undefined,
+    isActive: row[3] as number,
+    createdAt: row[4] as string,
+    updatedAt: row[5] as string,
+  }));
+}
+
+export function getProjectById(id: string): ProjectRecord | undefined {
+  const database = getDb();
+  const stmt = database.prepare('SELECT * FROM projects WHERE id = ?');
+  stmt.bind([id]);
+
+  if (stmt.step()) {
+    const row = stmt.get();
+    stmt.free();
+    return {
+      id: row[0] as string,
+      name: row[1] as string,
+      description: row[2] as string | undefined,
+      isActive: row[3] as number,
+      createdAt: row[4] as string,
+      updatedAt: row[5] as string,
+    };
+  }
+
+  stmt.free();
+  return undefined;
+}
+
+export function createProject(project: Omit<ProjectRecord, 'id' | 'createdAt' | 'updatedAt'>): ProjectRecord {
+  const database = getDb();
+  const id = uuidv4();
+  const now = new Date().toISOString();
+
+  database.run(
+    `INSERT INTO projects (id, name, description, isActive, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, project.name, project.description || null, project.isActive || 0, now, now]
+  );
+
+  saveDatabase();
+
+  return {
+    ...project,
+    id,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function updateProject(id: string, updates: Partial<ProjectRecord>): ProjectRecord | undefined {
+  const database = getDb();
+  const existing = getProjectById(id);
+  if (!existing) return undefined;
+
+  const now = new Date().toISOString();
+  const updated = { ...existing, ...updates, updatedAt: now };
+
+  database.run(
+    `UPDATE projects SET name = ?, description = ?, isActive = ?, updatedAt = ? WHERE id = ?`,
+    [updated.name, updated.description || null, updated.isActive, now, id]
+  );
+
+  saveDatabase();
+  return updated;
+}
+
+export function deleteProject(id: string) {
+  const database = getDb();
+  database.run('DELETE FROM projects WHERE id = ?', [id]);
+  saveDatabase();
+}
+
+export function setActiveProject(id: string) {
+  const database = getDb();
+  database.run('UPDATE projects SET isActive = 0');
+  database.run('UPDATE projects SET isActive = 1 WHERE id = ?', [id]);
+  saveDatabase();
+}
+
+export function getActiveProject(): ProjectRecord | undefined {
+  const database = getDb();
+  const results = database.exec('SELECT * FROM projects WHERE isActive = 1');
+  if (results.length === 0 || results[0].values.length === 0) return undefined;
+
+  const row = results[0].values[0];
+  return {
+    id: row[0] as string,
+    name: row[1] as string,
+    description: row[2] as string | undefined,
+    isActive: row[3] as number,
+    createdAt: row[4] as string,
+    updatedAt: row[5] as string,
+  };
+}
+
+export function getProjectDataSources(projectId: string): DataSourceRecord | undefined {
+  return getDataSourceByProjectId(projectId);
+}
+
+export function getProjectDataSourceById(id: string): DataSourceRecord | undefined {
+  return getDataSourceById(id);
+}
+
+export function createProjectDataSource(ds: Omit<DataSourceRecord, 'id' | 'createdAt' | 'updatedAt' | 'password'> & { password: string }): DataSourceRecord {
+  return createDataSource(ds);
+}
+
+export function updateProjectDataSource(id: string, ds: Partial<DataSourceRecord>): DataSourceRecord | undefined {
+  return updateDataSource(id, ds);
+}
+
+export function deleteProjectDataSource(id: string) {
+  deleteDataSource(id);
+}
+
+export function getProjectConfig(projectId: string): ProjectConfigRecord | undefined {
+  const database = getDb();
+  const stmt = database.prepare('SELECT * FROM project_configs WHERE projectId = ?');
+  stmt.bind([projectId]);
+
+  if (stmt.step()) {
+    const row = stmt.get();
+    stmt.free();
+    return {
+      id: row[0] as string,
+      projectId: row[1] as string,
+      apiBaseUrl: row[2] as string | undefined,
+      apiTokenPath: row[3] as string | undefined,
+      apiVersionPath: row[4] as string | undefined,
+      apiLogPath: row[5] as string | undefined,
+      redisHost: row[6] as string | undefined,
+      redisPort: row[7] as number | undefined,
+      redisPassword: decryptPassword(row[8] as string),
+      redisDb: row[9] as number | undefined,
+      createdAt: row[10] as string,
+      updatedAt: row[11] as string,
+    };
+  }
+
+  stmt.free();
+  return undefined;
+}
+
+export function createOrUpdateProjectConfig(config: Omit<ProjectConfigRecord, 'id' | 'createdAt' | 'updatedAt'>): ProjectConfigRecord {
+  const database = getDb();
+  const existing = getProjectConfig(config.projectId);
+  const now = new Date().toISOString();
+
+  if (existing) {
+    database.run(
+      `UPDATE project_configs SET apiBaseUrl = ?, apiTokenPath = ?, apiVersionPath = ?, apiLogPath = ?, redisHost = ?, redisPort = ?, redisPassword = ?, redisDb = ?, updatedAt = ? WHERE projectId = ?`,
+      [
+        config.apiBaseUrl || null,
+        config.apiTokenPath || null,
+        config.apiVersionPath || null,
+        config.apiLogPath || null,
+        config.redisHost || null,
+        config.redisPort || null,
+        config.redisPassword ? encryptPassword(config.redisPassword) : null,
+        config.redisDb || null,
+        now,
+        config.projectId,
+      ]
+    );
+    saveDatabase();
+    return { ...existing, ...config, updatedAt: now };
+  } else {
+    const id = uuidv4();
+    database.run(
+      `INSERT INTO project_configs (id, projectId, apiBaseUrl, apiTokenPath, apiVersionPath, apiLogPath, redisHost, redisPort, redisPassword, redisDb, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        config.projectId,
+        config.apiBaseUrl || null,
+        config.apiTokenPath || null,
+        config.apiVersionPath || null,
+        config.apiLogPath || null,
+        config.redisHost || null,
+        config.redisPort || null,
+        config.redisPassword ? encryptPassword(config.redisPassword) : null,
+        config.redisDb || null,
+        now,
+        now,
+      ]
+    );
+    saveDatabase();
+    return {
+      ...config,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+}
+
+export function deleteProjectConfig(projectId: string) {
+  const database = getDb();
+  database.run('DELETE FROM project_configs WHERE projectId = ?', [projectId]);
+  saveDatabase();
+}
+
+export function getActiveProjectWithDetails(): {
+  project: ProjectRecord | undefined;
+  dataSource: DataSourceRecord | undefined;
+  config: ProjectConfigRecord | undefined;
+} {
+  const project = getActiveProject();
+  if (!project) {
+    return { project: undefined, dataSource: undefined, config: undefined };
+  }
+
+  const dataSource = getDataSourceByProjectId(project.id);
+  const config = getProjectConfig(project.id);
+
+  return { project, dataSource, config };
 }

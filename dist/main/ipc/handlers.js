@@ -38,6 +38,9 @@ const electron_1 = require("electron");
 const sqlite_1 = require("../database/sqlite");
 const oracle_1 = require("../database/oracle");
 const dameng_1 = require("../database/dameng");
+const agent_1 = require("../agent");
+const config_1 = require("../agent/config");
+const gitLab_1 = require("../agent/tools/gitLab");
 let schemaAbortController = null;
 function registerIpcHandlers() {
     electron_1.ipcMain.handle('db:getDataSources', async () => {
@@ -90,17 +93,6 @@ function registerIpcHandlers() {
         }
         catch (error) {
             console.error('Error deleting data source:', error);
-            throw error;
-        }
-    });
-    electron_1.ipcMain.handle('db:setActiveDataSource', async (_, id) => {
-        try {
-            console.log('Setting active data source:', id);
-            (0, sqlite_1.setActiveDataSource)(id);
-            console.log('Active data source set');
-        }
-        catch (error) {
-            console.error('Error setting active data source:', error);
             throw error;
         }
     });
@@ -176,34 +168,38 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle('db:getSchema', async (event, dataSourceId, ownerFilter, tableNamePattern, useCache = true, filterEmptyTables = false) => {
         try {
-            console.log('=== db:getSchema called ===');
-            console.log('dataSourceId:', dataSourceId);
-            console.log('ownerFilter (received):', ownerFilter);
-            console.log('tableNamePattern (received):', tableNamePattern);
-            console.log('useCache:', useCache);
-            console.log('filterEmptyTables:', filterEmptyTables);
+            console.log('=== [DEBUG] db:getSchema called ===');
+            console.log('[DEBUG] dataSourceId:', dataSourceId);
+            console.log('[DEBUG] ownerFilter (received):', ownerFilter);
+            console.log('[DEBUG] tableNamePattern (received):', tableNamePattern);
+            console.log('[DEBUG] useCache:', useCache);
+            console.log('[DEBUG] filterEmptyTables:', filterEmptyTables);
             const ds = (0, sqlite_1.getDataSourceById)(dataSourceId);
             if (!ds) {
+                console.error('[DEBUG] Data source not found!');
                 throw new Error('数据源不存在');
             }
-            console.log('DataSource type:', ds.type);
-            console.log('DataSource schema:', ds.schema);
+            console.log('[DEBUG] DataSource type:', ds.type);
+            console.log('[DEBUG] DataSource schema:', ds.schema);
             const cacheKey = `${ownerFilter || ''}:${tableNamePattern || ''}:${filterEmptyTables ? 'filterEmpty' : ''}`;
+            console.log('[DEBUG] Generated cacheKey:', cacheKey);
             if (useCache) {
+                console.log('[DEBUG] Attempting to use cache...');
                 const cached = (0, sqlite_1.getSchemaCache)(dataSourceId, cacheKey);
                 if (cached) {
+                    console.log('[DEBUG] Found cache entry');
                     const cacheAgeMs = Date.now() - new Date(cached.cachedAt).getTime();
                     const cacheAgeHours = cacheAgeMs / (1000 * 60 * 60);
                     if (cacheAgeHours < 24) {
-                        console.log(`Using cached schema (age: ${cacheAgeHours.toFixed(2)} hours)`);
+                        console.log(`[DEBUG] Using cached schema (age: ${cacheAgeHours.toFixed(2)} hours), tables: ${cached.schemaData?.length}`);
                         return cached.schemaData;
                     }
                     else {
-                        console.log(`Cache expired (age: ${cacheAgeHours.toFixed(2)} hours), fetching fresh`);
+                        console.log(`[DEBUG] Cache expired (age: ${cacheAgeHours.toFixed(2)} hours), fetching fresh`);
                     }
                 }
                 else {
-                    console.log('No cached schema found');
+                    console.log('[DEBUG] No cached schema found for key:', cacheKey);
                 }
             }
             schemaAbortController = new AbortController();
@@ -222,9 +218,9 @@ function registerIpcHandlers() {
                     password: ds.password,
                     schema: ds.schema,
                 };
-                console.log('Calling getOracleTables with params:', { ownerFilter, tableNamePattern, filterEmptyTables });
+                console.log('[DEBUG] Calling getOracleTables with params:', { ownerFilter, tableNamePattern, filterEmptyTables });
                 tables = await (0, oracle_1.getOracleTables)(params, sendProgress, ownerFilter, tableNamePattern, abortSignal, filterEmptyTables);
-                console.log(`Got ${tables.length} tables for Oracle`);
+                console.log(`[DEBUG] Got ${tables.length} tables for Oracle`);
             }
             else if (ds.type === 'dameng') {
                 const params = {
@@ -234,22 +230,35 @@ function registerIpcHandlers() {
                     username: ds.username,
                     password: ds.password,
                 };
-                console.log('Calling getDamengTables with tableNamePattern:', tableNamePattern);
+                console.log('[DEBUG] Calling getDamengTables with tableNamePattern:', tableNamePattern);
                 tables = await (0, dameng_1.getDamengTables)(params, sendProgress, tableNamePattern, abortSignal, filterEmptyTables);
-                console.log(`Got ${tables.length} tables for Dameng`);
+                console.log(`[DEBUG] Got ${tables.length} tables for Dameng`);
             }
             else {
                 throw new Error('不支持的数据库类型');
             }
-            if (useCache && tables.length > 0) {
-                console.log('Caching schema...');
-                (0, sqlite_1.setSchemaCache)(dataSourceId, tables, cacheKey);
-                (0, sqlite_1.cleanOldSchemaCache)(7);
+            // 无论什么情况，只要我们成功获取了表结构，就保存缓存！
+            console.log('[DEBUG] ========== Attempting to save cache ==========');
+            console.log('[DEBUG] useCache:', useCache);
+            console.log('[DEBUG] tables.length:', tables.length);
+            if (tables.length > 0) {
+                try {
+                    console.log('[DEBUG] Caching schema with', tables.length, 'tables and cacheKey:', cacheKey);
+                    (0, sqlite_1.setSchemaCache)(dataSourceId, tables, cacheKey);
+                    (0, sqlite_1.cleanOldSchemaCache)(7);
+                    console.log('[DEBUG] Cache saved successfully!');
+                }
+                catch (cacheError) {
+                    console.error('[DEBUG] ERROR saving cache:', cacheError);
+                }
+            }
+            else {
+                console.log('[DEBUG] No tables to cache');
             }
             return tables;
         }
         catch (error) {
-            console.error('Error getting schema:', error);
+            console.error('[DEBUG] Error getting schema:', error);
             throw error;
         }
         finally {
@@ -258,20 +267,22 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle('db:getSchemaFromCache', async (_, dataSourceId) => {
         try {
-            console.log('=== db:getSchemaFromCache called ===');
-            console.log('dataSourceId:', dataSourceId);
+            console.log('=== [DEBUG] db:getSchemaFromCache called ===');
+            console.log('[DEBUG] dataSourceId:', dataSourceId);
             const cache = (0, sqlite_1.getSchemaCache)(dataSourceId, undefined, true);
             if (cache) {
-                console.log('Found cached schema');
+                console.log('[DEBUG] Found cached schema');
+                console.log('[DEBUG] schemaData length:', cache.schemaData?.length);
+                console.log('[DEBUG] cachedAt:', cache.cachedAt);
                 return cache.schemaData;
             }
             else {
-                console.log('No cached schema found');
+                console.log('[DEBUG] No cached schema found');
                 return [];
             }
         }
         catch (error) {
-            console.error('Error getting schema from cache:', error);
+            console.error('[DEBUG] Error getting schema from cache:', error);
             throw error;
         }
     });
@@ -368,7 +379,298 @@ function registerIpcHandlers() {
             throw error;
         }
     });
+    electron_1.ipcMain.handle('project:getAll', async () => {
+        try {
+            return (0, sqlite_1.getAllProjects)();
+        }
+        catch (error) {
+            console.error('Error getting projects:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:getById', async (_, id) => {
+        try {
+            return (0, sqlite_1.getProjectById)(id);
+        }
+        catch (error) {
+            console.error('Error getting project by id:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:create', async (_, project) => {
+        try {
+            console.log('Creating project:', project);
+            const result = (0, sqlite_1.createProject)(project);
+            console.log('Project created:', result);
+            return result;
+        }
+        catch (error) {
+            console.error('Error creating project:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:update', async (_, id, project) => {
+        try {
+            console.log('Updating project:', id, project);
+            const result = (0, sqlite_1.updateProject)(id, project);
+            console.log('Project updated:', result);
+            return result;
+        }
+        catch (error) {
+            console.error('Error updating project:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:delete', async (_, id) => {
+        try {
+            console.log('Deleting project:', id);
+            (0, sqlite_1.deleteProject)(id);
+            console.log('Project deleted');
+        }
+        catch (error) {
+            console.error('Error deleting project:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:setActive', async (_, id) => {
+        try {
+            console.log('Setting active project:', id);
+            (0, sqlite_1.setActiveProject)(id);
+            console.log('Active project set');
+        }
+        catch (error) {
+            console.error('Error setting active project:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:getActive', async () => {
+        try {
+            return (0, sqlite_1.getActiveProject)();
+        }
+        catch (error) {
+            console.error('Error getting active project:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:getActiveWithDetails', async () => {
+        try {
+            return (0, sqlite_1.getActiveProjectWithDetails)();
+        }
+        catch (error) {
+            console.error('Error getting active project with details:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:getDataSource', async (_, projectId) => {
+        try {
+            return (0, sqlite_1.getDataSourceByProjectId)(projectId);
+        }
+        catch (error) {
+            console.error('Error getting project data source:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:createDataSource', async (_, ds) => {
+        try {
+            console.log('Creating project data source:', ds);
+            const result = (0, sqlite_1.createProjectDataSource)(ds);
+            console.log('Project data source created:', result);
+            return result;
+        }
+        catch (error) {
+            console.error('Error creating project data source:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:updateDataSource', async (_, id, ds) => {
+        try {
+            console.log('Updating project data source:', id, ds);
+            const result = (0, sqlite_1.updateProjectDataSource)(id, ds);
+            console.log('Project data source updated:', result);
+            return result;
+        }
+        catch (error) {
+            console.error('Error updating project data source:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:deleteDataSource', async (_, id) => {
+        try {
+            console.log('Deleting project data source:', id);
+            (0, sqlite_1.deleteProjectDataSource)(id);
+            console.log('Project data source deleted');
+        }
+        catch (error) {
+            console.error('Error deleting project data source:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:getConfig', async (_, projectId) => {
+        try {
+            return (0, sqlite_1.getProjectConfig)(projectId);
+        }
+        catch (error) {
+            console.error('Error getting project config:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:saveConfig', async (_, config) => {
+        try {
+            console.log('Saving project config:', config);
+            const result = (0, sqlite_1.createOrUpdateProjectConfig)(config);
+            console.log('Project config saved:', result);
+            return result;
+        }
+        catch (error) {
+            console.error('Error saving project config:', error);
+            throw error;
+        }
+    });
+    electron_1.ipcMain.handle('project:testDataSourceConnection', async (_, ds) => {
+        try {
+            console.log('Testing project data source connection:', ds);
+            if (ds.type === 'oracle') {
+                const params = {
+                    host: ds.host,
+                    port: ds.port,
+                    serviceName: ds.serviceName,
+                    sid: ds.sid,
+                    username: ds.username,
+                    password: ds.password,
+                    schema: ds.schema,
+                };
+                const result = await testOracleConnection(params);
+                return result;
+            }
+            else if (ds.type === 'dameng') {
+                const params = {
+                    host: ds.host,
+                    port: ds.port,
+                    schema: ds.schema || ds.username,
+                    username: ds.username,
+                    password: ds.password,
+                };
+                const result = await testDamengConnection(params);
+                return result;
+            }
+            return { success: false, message: '不支持的数据库类型' };
+        }
+        catch (error) {
+            console.error('Project data source connection test failed:', error);
+            return { success: false, message: error.message };
+        }
+    });
+    electron_1.ipcMain.handle('project:executeQuery', async (_, dataSourceId, sql) => {
+        try {
+            console.log('Executing query on project data source:', dataSourceId, sql);
+            const dataSource = (0, sqlite_1.getDataSourceById)(dataSourceId);
+            if (!dataSource) {
+                throw new Error('数据源不存在');
+            }
+            if (dataSource.type === 'oracle') {
+                const params = {
+                    host: dataSource.host,
+                    port: dataSource.port,
+                    serviceName: dataSource.serviceName,
+                    sid: dataSource.sid,
+                    username: dataSource.username,
+                    password: dataSource.password,
+                    schema: dataSource.schema,
+                };
+                const result = await (0, oracle_1.executeOracleQuery)(params, sql);
+                (0, sqlite_1.addQueryHistory)({
+                    sql,
+                    executedAt: new Date().toISOString(),
+                    executionTime: result.executionTime,
+                    rowCount: result.rowCount,
+                    dataSourceId: dataSource.id,
+                    dataSourceName: dataSource.name,
+                });
+                return result;
+            }
+            else if (dataSource.type === 'dameng') {
+                const params = {
+                    host: dataSource.host,
+                    port: dataSource.port,
+                    schema: dataSource.schema || dataSource.username,
+                    username: dataSource.username,
+                    password: dataSource.password,
+                };
+                const result = await (0, dameng_1.executeDamengQuery)(params, sql);
+                (0, sqlite_1.addQueryHistory)({
+                    sql,
+                    executedAt: new Date().toISOString(),
+                    executionTime: result.executionTime,
+                    rowCount: result.rowCount,
+                    dataSourceId: dataSource.id,
+                    dataSourceName: dataSource.name,
+                });
+                return result;
+            }
+            throw new Error('不支持的数据库类型');
+        }
+        catch (error) {
+            console.error('Error executing query:', error);
+            throw error;
+        }
+    });
     console.log('All IPC handlers registered');
+    electron_1.ipcMain.handle('ai:startAnalysis', async (event, request) => {
+        try {
+            console.log('Starting AI analysis:', request);
+            const agent = new agent_1.HISAnalysisAgent({
+                apiKey: config_1.DEEPSEEK_CONFIG.apiKey,
+                streamCallback: (content) => {
+                    event.sender.send('ai:stream', content);
+                }
+            });
+            const result = await agent.analyze(request);
+            return result;
+        }
+        catch (error) {
+            console.error('AI analysis error:', error);
+            return {
+                success: false,
+                message: `分析失败: ${error.message}`,
+                conversation: [],
+            };
+        }
+    });
+    electron_1.ipcMain.handle('ai:chat', async (event, message, dataSourceId) => {
+        try {
+            console.log('AI chat:', message);
+            const agent = new agent_1.HISAnalysisAgent({
+                apiKey: config_1.DEEPSEEK_CONFIG.apiKey,
+                streamCallback: (content) => {
+                    event.sender.send('ai:stream', content);
+                }
+            });
+            const result = await agent.chat(message, dataSourceId);
+            return result;
+        }
+        catch (error) {
+            console.error('AI chat error:', error);
+            return {
+                success: false,
+                message: `对话失败: ${error.message}`,
+                conversation: [],
+            };
+        }
+    });
+    electron_1.ipcMain.handle('ai:setGitLabConfig', async (_, config) => {
+        try {
+            (0, gitLab_1.updateGitLabConfig)({
+                baseUrl: config.baseUrl,
+                token: config.token,
+                defaultBranch: config.defaultBranch,
+            });
+            return { success: true, message: 'GitLab 配置已更新' };
+        }
+        catch (error) {
+            return { success: false, message: error.message };
+        }
+    });
+    console.log('AI analysis handlers registered');
 }
 async function testOracleConnection(params) {
     const oracle = await Promise.resolve().then(() => __importStar(require('../database/oracle')));

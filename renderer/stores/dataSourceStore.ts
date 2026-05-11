@@ -26,6 +26,8 @@ export interface TableColumn {
   comments: string;
   isPrimaryKey: boolean;
   isUsed?: boolean;
+  hasData?: boolean;
+  dataPercentage?: number;
 }
 
 export interface TableIndex {
@@ -119,12 +121,12 @@ interface DataSourceStore {
 declare global {
   interface Window {
     electronAPI: {
-      getDataSources: () => Promise<DataSource[]>;
-      createDataSource: (ds: any) => Promise<DataSource>;
-      updateDataSource: (id: string, ds: any) => Promise<DataSource>;
+      getDataSources: () => Promise<any[]>;
+      createDataSource: (ds: any) => Promise<any>;
+      updateDataSource: (id: string, ds: any) => Promise<any>;
       deleteDataSource: (id: string) => Promise<void>;
       setActiveDataSource: (id: string) => Promise<void>;
-      getActiveDataSource: () => Promise<DataSource | null>;
+      getActiveDataSource: () => Promise<any>;
       testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
       getQueryHistory: () => Promise<any[]>;
       clearQueryHistory: () => Promise<void>;
@@ -135,6 +137,55 @@ declare global {
       cancelSchemaLoad: () => Promise<void>;
       removeTableFromCache: (dataSourceId: string, tableName: string) => Promise<void>;
       removeTablesFromCache: (dataSourceId: string, tableNames: string[]) => Promise<void>;
+      startAnalysis: (request: {
+        description: string;
+        logId: string;
+        projectId: string;
+        aiModel: string;
+      }) => Promise<{
+        success: boolean;
+        message: string;
+        conversation: Array<{
+          role: string;
+          content: string;
+          toolCalls?: any[];
+          toolCallId?: string;
+          name?: string;
+        }>;
+      }>;
+      chatWithAI: (message: string, projectId: string) => Promise<{
+        success: boolean;
+        message: string;
+        conversation: Array<{
+          role: string;
+          content: string;
+          toolCalls?: any[];
+          toolCallId?: string;
+          name?: string;
+        }>;
+      }>;
+      setGitLabConfig: (config: { baseUrl: string; token: string; defaultBranch?: string }) => Promise<{ success: boolean; message: string }>;
+      onAIStream: (callback: (content: string) => void) => () => void;
+      project: {
+        getAll: () => Promise<any[]>;
+        getById: (id: string) => Promise<any>;
+        create: (project: { name: string; description?: string; isActive?: number }) => Promise<any>;
+        update: (id: string, project: any) => Promise<any>;
+        delete: (id: string) => Promise<void>;
+        setActive: (id: string) => Promise<void>;
+        getActive: () => Promise<any>;
+        getActiveWithDetails: () => Promise<any>;
+        getDataSources: (projectId: string) => Promise<any[]>;
+        getDataSourceById: (id: string) => Promise<any>;
+        createDataSource: (ds: any) => Promise<any>;
+        updateDataSource: (id: string, ds: any) => Promise<any>;
+        deleteDataSource: (id: string) => Promise<void>;
+        getConfig: (projectId: string) => Promise<any>;
+        saveConfig: (config: any) => Promise<any>;
+        deleteConfig: (projectId: string) => Promise<void>;
+        testDataSourceConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
+        executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
+      };
     };
   }
 }
@@ -241,7 +292,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
           }
         }
 
-        const processedSchema = filteredSchema.map(table => ({
+        const processedSchema: TableInfo[] = filteredSchema.map(table => ({
           ...table,
           columns: table.columns.map(col => ({
             ...col,
@@ -250,7 +301,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
         }));
 
         set((state) => {
-          let mergedTables = processedSchema;
+          let mergedTables: TableInfo[] = processedSchema;
 
           if (mergeWithExisting && state.schema.length > 0) {
             const existingTableNames = new Set(state.schema.map(t => t.tableName));
@@ -277,15 +328,18 @@ export const useDataSourceStore = create<DataSourceStore>()(
 
     loadSchemaFromCache: async (dataSourceId: string) => {
       try {
+        console.log('[DEBUG] loadSchemaFromCache called with dataSourceId:', dataSourceId);
         const schema = await window.electronAPI.getSchemaFromCache(dataSourceId);
+        console.log('[DEBUG] getSchemaFromCache returned schema with length:', schema.length);
         if (schema.length > 0) {
-          const processedSchema = schema.map(table => ({
+          const processedSchema: TableInfo[] = schema.map(table => ({
             ...table,
             columns: table.columns.map(col => ({
               ...col,
               isUsed: col.isUsed ?? (col.hasData && !col.isPrimaryKey),
             })),
           }));
+          console.log('[DEBUG] Setting schema with', processedSchema.length, 'tables');
           set({
             schema: processedSchema,
             schemaLoading: false,
@@ -294,10 +348,12 @@ export const useDataSourceStore = create<DataSourceStore>()(
             schemaFilterPattern: '',
           });
           return true;
+        } else {
+          console.log('[DEBUG] Schema from cache is empty, returning false');
         }
         return false;
       } catch (error) {
-        console.error('Error loading schema from cache:', error);
+        console.error('[DEBUG] Error loading schema from cache:', error);
         return false;
       }
     },
@@ -323,17 +379,19 @@ export const useDataSourceStore = create<DataSourceStore>()(
         }
       },
 
-      refreshSchema: async () => {
+      refreshSchema: async (dataSourceId?: string) => {
         const { activeDataSource, filterEmptyTables } = get();
-        if (activeDataSource?.id) {
-          await get().loadSchema(activeDataSource.id, false, false, filterEmptyTables);
+        const id = dataSourceId || activeDataSource?.id;
+        if (id) {
+          await get().loadSchema(id, false, false, filterEmptyTables);
         }
       },
 
-      refreshSchemaWithMerge: async () => {
+      refreshSchemaWithMerge: async (dataSourceId?: string) => {
         const { activeDataSource, filterEmptyTables } = get();
-        if (activeDataSource?.id) {
-          await get().loadSchema(activeDataSource.id, false, true, filterEmptyTables);
+        const id = dataSourceId || activeDataSource?.id;
+        if (id) {
+          await get().loadSchema(id, false, true, filterEmptyTables);
         }
       },
 

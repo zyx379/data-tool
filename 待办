@@ -1,0 +1,8 @@
+1、获取版本信息
+http://192.168.5.24:8081/portal-service/api/manage/system/getVersionInfo
+The user is asking for the token that was used in the previous API calls.
+刚才使用的 token 信息如下：
+- **apiKey**: `HIS5`
+- **onelinkToken**: `y6YdPRHBFxP82hv3F37A8eWm13l22acXXbx58/Oe6xZmIdZYoijG3EneQFr1Vgn6`
+2、应用日志
+日志api地址 http://192.168.5.24:8081/log-manage-service/log/search

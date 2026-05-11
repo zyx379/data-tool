@@ -1,6 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import DataSources from './DataSources';
 import { useDataSourceStore, TableInfo, TableColumn } from '../stores/dataSourceStore';
+import { useAnalysisStore, MODULE_VERSIONS, AI_MODELS, AnalysisStatus } from '../stores/analysisStore';
+import { useProjectStore } from '../stores/projectStore';
 
 interface TablesByOwner {
   [owner: string]: TableInfo[];
@@ -22,8 +24,41 @@ interface OpenTab {
   tableInfo: TableInfo;
 }
 
+const isDateTimeType = (dataType: string): boolean => {
+  const lowerType = dataType.toLowerCase();
+  return lowerType.includes('date') || lowerType.includes('timestamp') || lowerType.includes('time');
+};
+
+const formatDateTime = (value: any): string => {
+  if (value === null || value === undefined) return '-';
+  
+  let dateValue: Date;
+  
+  if (value instanceof Date) {
+    dateValue = value;
+  } else if (typeof value === 'string') {
+    dateValue = new Date(value);
+  } else {
+    return String(value);
+  }
+  
+  if (isNaN(dateValue.getTime())) {
+    return String(value);
+  }
+  
+  const year = dateValue.getFullYear();
+  const month = String(dateValue.getMonth() + 1).padStart(2, '0');
+  const day = String(dateValue.getDate()).padStart(2, '0');
+  const hours = String(dateValue.getHours()).padStart(2, '0');
+  const minutes = String(dateValue.getMinutes()).padStart(2, '0');
+  const seconds = String(dateValue.getSeconds()).padStart(2, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+};
+
 function Schema() {
-  const [showDatasources, setShowDatasources] = useState(false);
+  // 主导航标签: 'query' | 'datasources' | 'analysis'
+  const [activeMainTab, setActiveMainTab] = useState<'query' | 'datasources' | 'analysis'>('query');
   const [showRefreshModal, setShowRefreshModal] = useState(false);
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null);
@@ -183,37 +218,6 @@ function Schema() {
     });
   };
 
-  const handleDeleteQueryTemplate = (templateId: string) => {
-    deleteQueryConditionTemplate(templateId);
-  };
-
-  const autoAddDefaultFields = (tableName: string, columns: TableColumn[]) => {
-    const eventNoCol = columns.find(c => c.columnName === 'EVENT_NO');
-    const patientIdCol = columns.find(c => c.columnName === 'PATIENT_ID');
-    
-    const newConditions: QueryCondition[] = [];
-    
-    if (eventNoCol) {
-      newConditions.push({ columnName: 'EVENT_NO', operator: '=', value: '' });
-    }
-    if (patientIdCol) {
-      newConditions.push({ columnName: 'PATIENT_ID', operator: '=', value: '' });
-    }
-    
-    if (newConditions.length > 0) {
-      const currentConditions = queryConditions[tableName] || [];
-      const existingColumns = new Set(currentConditions.map(c => c.columnName));
-      const filteredNewConditions = newConditions.filter(c => !existingColumns.has(c.columnName));
-      
-      if (filteredNewConditions.length > 0) {
-        setQueryConditions({
-          ...queryConditions,
-          [tableName]: [...currentConditions, ...filteredNewConditions]
-        });
-      }
-    }
-  };
-
   useEffect(() => {
     const handleClick = () => {
       closeContextMenu();
@@ -225,15 +229,17 @@ function Schema() {
   }, []);
 
   const {
-    dataSources,
     activeDataSource,
+    activeProject,
+    loadActiveProjectDetails,
+    executeQuery: executeProjectQuery,
+  } = useProjectStore();
+
+  const {
     schema,
     schemaLoading,
     schemaError,
-    loadDataSources,
-    loadSchema,
     loadSchemaFromCache,
-    setActiveDataSource,
     refreshSchema,
     refreshSchemaWithMerge,
     cancelSchemaLoad,
@@ -257,8 +263,8 @@ function Schema() {
     removeTable,
     removeTables,
     saveQueryConditionTemplate,
-    deleteQueryConditionTemplate,
     getQueryConditionTemplatesForTable,
+    loadSchema,
   } = useDataSourceStore();
 
   useEffect(() => {
@@ -271,14 +277,43 @@ function Schema() {
   }, [setSchemaProgress]);
 
   useEffect(() => {
-    loadDataSources();
-  }, [loadDataSources]);
+    loadActiveProjectDetails();
+  }, [loadActiveProjectDetails]);
 
+  // 数据源变更时，从缓存加载 schema
   useEffect(() => {
-    if (activeDataSource?.id && schema.length === 0) {
+    console.log('[DEBUG] Schema component useEffect triggered with activeDataSource:', activeDataSource);
+    if (activeDataSource?.id) {
+      console.log('[DEBUG] Active data source found, id:', activeDataSource.id);
+      // 先设置 dataSourceStore 的 activeDataSource 供内部方法使用
+      const dsCompat = {
+        id: activeDataSource.id,
+        name: activeDataSource.name,
+        type: activeDataSource.type,
+        host: activeDataSource.host,
+        port: activeDataSource.port,
+        sid: activeDataSource.sid,
+        serviceName: activeDataSource.serviceName,
+        schema: activeDataSource.schema,
+        username: activeDataSource.username,
+        password: activeDataSource.password,
+        isActive: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      useDataSourceStore.setState({ activeDataSource: dsCompat });
+      
+      // 从缓存加载表结构
+      console.log('[DEBUG] Calling loadSchemaFromCache with id:', activeDataSource.id);
       loadSchemaFromCache(activeDataSource.id);
+    } else {
+      console.log('[DEBUG] No active data source, clearing schema');
+      useDataSourceStore.setState({ 
+        activeDataSource: null, 
+        schema: [] 
+      });
     }
-  }, [activeDataSource, schema.length, loadSchemaFromCache]);
+  }, [activeDataSource?.id, loadSchemaFromCache]);
 
   useEffect(() => {
     setHasAutoAddedDefaultFields(false);
@@ -291,13 +326,6 @@ function Schema() {
       table.comments.toLowerCase().includes(searchTerm.toLowerCase())
     );
   });
-
-  const handleDataSourceChange = async (dsId: string) => {
-    await setActiveDataSource(dsId);
-    setOpenTabs([]);
-    setActiveTabKey(null);
-    await loadSchema(dsId, true);
-  };
 
   const openTable = (table: TableInfo) => {
     const existingTab = openTabs.find(tab => tab.tableName === table.tableName);
@@ -510,7 +538,7 @@ function Schema() {
     
     try {
       const sql = generateSQL(table, tableName);
-      const results = await window.electronAPI.executeQuery(activeDataSource.id, sql);
+      const results = await executeProjectQuery(sql);
       setQueryResults({
         ...queryResults,
         [tableName]: results
@@ -530,65 +558,53 @@ function Schema() {
   };
 
   return (
-    <div className="flex flex-1">
-      {/* 左侧导航栏 */}
-      <div className={`${sidebarCollapsed ? 'w-14' : 'w-56'} bg-gradient-to-b from-slate-50 to-white border-r border-slate-200 flex flex-col transition-all duration-300 shadow-sm`}>
-        {/* 头部 */}
-        <div className="px-2 py-2 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-50">
-          {!sidebarCollapsed && (
-            <h1 className="text-sm font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-              zoehis-helper
-            </h1>
-          )}
-          <button 
-            onClick={toggleSidebar} 
-            className="p-1 hover:bg-slate-200 rounded-full transition-all duration-200 text-slate-500 hover:text-slate-700"
-            title={sidebarCollapsed ? '展开导航栏' : '收起导航栏'}
-          >
-            {sidebarCollapsed ? (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-              </svg>
-            )}
-          </button>
-        </div>
-        
-        {/* 导航菜单 */}
-        <nav className="flex-1 py-2 px-1 space-y-1">
+    <div className="flex flex-col flex-1 h-full">
+      {/* 顶部导航栏 */}
+      <div className="h-12 bg-gradient-to-r from-slate-50 to-white border-b border-slate-200 flex items-center px-4 shadow-sm z-[60] relative">
+        <nav className="flex items-center gap-1">
           <button
-            onClick={() => setShowDatasources(false)}
-            className={`w-full flex items-center ${!sidebarCollapsed ? 'justify-start space-x-2 pl-2' : 'justify-center'} py-2 rounded-lg transition-all duration-200 ${
-              !showDatasources 
-                ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-md shadow-blue-200' 
+            onClick={() => setActiveMainTab('query')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
+              activeMainTab === 'query'
+                ? 'bg-blue-500 text-white shadow-sm'
                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
             }`}
           >
-            <span className="text-lg">📊</span>
-            {!sidebarCollapsed && <span className="font-medium text-sm">数据查询</span>}
+            <span>📊</span>
+            <span>数据查询</span>
           </button>
-          
           <button
-            onClick={() => setShowDatasources(true)}
-            className={`w-full flex items-center ${!sidebarCollapsed ? 'justify-start space-x-2 pl-2' : 'justify-center'} py-2 rounded-lg transition-all duration-200 ${
-              showDatasources 
-                ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-md shadow-blue-200' 
+            onClick={() => setActiveMainTab('datasources')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
+              activeMainTab === 'datasources'
+                ? 'bg-blue-500 text-white shadow-sm'
                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
             }`}
           >
-            <span className="text-lg">🔌</span>
-            {!sidebarCollapsed && <span className="font-medium text-sm">数据源管理</span>}
+            <span>🔌</span>
+            <span>项目管理</span>
+          </button>
+          <button
+            onClick={() => setActiveMainTab('analysis')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
+              activeMainTab === 'analysis'
+                ? 'bg-blue-500 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <span>🤖</span>
+            <span>智能分析</span>
           </button>
         </nav>
       </div>
 
-      {showDatasources ? (
+      <div className="flex flex-1 overflow-hidden">
+      {activeMainTab === 'datasources' ? (
         <div className="flex-1 overflow-auto p-6 bg-gray-100">
           <DataSources />
         </div>
+      ) : activeMainTab === 'analysis' ? (
+        <AnalysisPage />
       ) : (
         <div className="flex-1 flex">
           {/* 表列表 */}
@@ -922,11 +938,7 @@ function Schema() {
                           onClick={() => {
                             setActiveSubTab('query');
                             if (!hasAutoAddedDefaultFields && activeTabKey) {
-                              const activeTable = openTabs.find(tab => tab.tableName === activeTabKey);
-                              if (activeTable) {
-                                autoAddDefaultFields(activeTabKey, activeTable.tableInfo.columns);
-                                setHasAutoAddedDefaultFields(true);
-                              }
+                              setHasAutoAddedDefaultFields(true);
                             }
                           }}
                           className={`px-4 py-2 rounded-lg font-medium text-sm transition-all duration-200 ${
@@ -992,7 +1004,9 @@ function Schema() {
                                       type="checkbox"
                                       checked={isUsed}
                                       onChange={(e) => {
-                                        toggleFieldUsed(activeDataSource.id, activeTable.tableName, col.columnName, e.target.checked);
+                                        if (activeDataSource?.id) {
+                                          toggleFieldUsed(activeDataSource.id, activeTable.tableName, col.columnName, e.target.checked);
+                                        }
                                       }}
                                       className="rounded"
                                     />
@@ -1076,7 +1090,7 @@ function Schema() {
                         </div>
                       </div>
 
-                      <div className="fixed top-24 right-6 z-20 flex items-center space-x-2">
+                      <div className="fixed top-32 right-6 z-20 flex items-center space-x-2">
                         <button
                           onClick={() => executeQuery(activeTable.tableInfo, activeTable.tableName)}
                           disabled={isExecuting}
@@ -1230,12 +1244,16 @@ function Schema() {
 
                     <div className="flex-1 overflow-hidden bg-white">
                       {queryResults[activeTable.tableName] ? (
+                        (() => {
+                          const results = queryResults[activeTable.tableName];
+                          if (!results) return null;
+                          return (
                         <div className="h-full flex flex-col">
                           <div className="p-3 border-b border-slate-200 bg-gray-50 flex-shrink-0">
                             <h4 className="font-semibold text-gray-700 text-sm">
-                              查询结果 ({queryResults[activeTable.tableName].rows.length} 条)
+                              查询结果 ({results.rows.length} 条)
                               <span className="text-xs text-gray-400 ml-2 font-normal">
-                                ({queryResults[activeTable.tableName].columns.length} 列)
+                                ({results.columns.length} 列)
                               </span>
                             </h4>
                           </div>
@@ -1243,7 +1261,7 @@ function Schema() {
                             <table className="min-w-full">
                               <thead className="bg-gray-100 sticky top-0 z-10">
                                 <tr>
-                                  {queryResults[activeTable.tableName].columns.map((col) => (
+                                  {results.columns.map((col) => (
                                     <th key={col} className="px-3 py-2 text-left text-xs font-medium text-gray-600 border-b border-r border-gray-200 whitespace-nowrap">
                                       {(activeTable.tableInfo.columns.find(c => c.columnName === col)?.comments && showColumnNamesInChinese) ? activeTable.tableInfo.columns.find(c => c.columnName === col)?.comments : col}
                                     </th>
@@ -1251,24 +1269,32 @@ function Schema() {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-200">
-                                {queryResults[activeTable.tableName].rows.slice(0, 100).map((row, index) => (
+                                {results.rows.slice(0, 100).map((row, index) => (
                                   <tr key={index} className="hover:bg-blue-50 transition-colors">
-                                    {row.map((cell, i) => (
-                                      <td key={i} className="px-3 py-2 text-xs border-b border-r border-gray-100 max-w-xs truncate" title={String(cell ?? '-')}>
-                                        {cell !== null && cell !== undefined ? String(cell) : '-'}
-                                      </td>
-                                    ))}
+                                    {row.map((cell, i) => {
+                                      const columnName = results.columns[i];
+                                      const columnInfo = activeTable.tableInfo.columns.find(c => c.columnName === columnName);
+                                      const isDateTimeCol = columnInfo ? isDateTimeType(columnInfo.dataType) : false;
+                                      const displayValue = isDateTimeCol ? formatDateTime(cell) : (cell !== null && cell !== undefined ? String(cell) : '-');
+                                      return (
+                                        <td key={i} className="px-3 py-2 text-xs border-b border-r border-gray-100 max-w-xs truncate" title={String(cell ?? '-')}>
+                                          {displayValue}
+                                        </td>
+                                      );
+                                    })}
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
                           </div>
-                          {queryResults[activeTable.tableName].rows.length > 100 && (
+                          {results.rows.length > 100 && (
                             <div className="p-2 bg-amber-50 border-t border-amber-200 text-xs text-amber-700 text-center">
                               显示前100条结果，完整结果请导出Excel
                             </div>
                           )}
                         </div>
+                          );
+                        })()
                       ) : (
                         <div className="h-full flex items-center justify-center text-gray-400">
                           <div className="text-center">
@@ -1292,8 +1318,8 @@ function Schema() {
       )}
 
       {showRefreshModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4 z-50 relative">
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-700">加载表结构</h3>
               <button
@@ -1386,11 +1412,13 @@ function Schema() {
                     if (schemaFilterPattern) {
                       addSchemaFilterHistory(schemaFilterPattern);
                     }
-                    refreshSchema();
+                    if (activeDataSource?.id) {
+                      refreshSchema(activeDataSource.id);
+                    }
                     setShowRefreshModal(false);
                   }
                 }}
-                disabled={schemaLoading}
+                disabled={schemaLoading || !activeDataSource?.id}
                 className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 disabled:opacity-50 transition-colors"
               >
                 {schemaLoading ? '加载中...' : '覆盖更新'}
@@ -1400,10 +1428,12 @@ function Schema() {
                   if (schemaFilterPattern) {
                     addSchemaFilterHistory(schemaFilterPattern);
                   }
-                  refreshSchemaWithMerge();
+                  if (activeDataSource?.id) {
+                    refreshSchemaWithMerge(activeDataSource.id);
+                  }
                   setShowRefreshModal(false);
                 }}
-                disabled={schemaLoading}
+                disabled={schemaLoading || !activeDataSource?.id}
                 className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
               >
                 {schemaLoading ? '加载中...' : '增量更新'}
@@ -1414,8 +1444,8 @@ function Schema() {
       )}
 
       {showSaveConditionModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4 z-50 relative">
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-700">保存查询条件</h3>
               <button
@@ -1566,8 +1596,8 @@ function Schema() {
       )}
 
       {deleteTarget && showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4 z-50 relative">
             <div className="flex items-center gap-4 p-4 border-b border-slate-200">
               <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
                 <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1608,8 +1638,8 @@ function Schema() {
       )}
 
       {showOverwriteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
+          <div className="bg-white rounded-lg shadow-xl w-96 max-w-full mx-4 z-50 relative">
             <div className="flex items-center gap-4 p-4 border-b border-slate-200">
               <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
                 <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1643,11 +1673,14 @@ function Schema() {
                   if (schemaFilterPattern) {
                     addSchemaFilterHistory(schemaFilterPattern);
                   }
-                  refreshSchema();
+                  if (activeDataSource?.id) {
+                    refreshSchema(activeDataSource.id);
+                  }
                   setShowRefreshModal(false);
                   setShowOverwriteConfirm(false);
                 }}
-                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                disabled={!activeDataSource?.id}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 transition-colors"
               >
                 确认覆盖
               </button>
@@ -1655,7 +1688,475 @@ function Schema() {
           </div>
         </div>
       )}
+      </div>
     </div>
+  );
+}
+
+// ==================== 智能分析模块 ====================
+
+function AnalysisPage() {
+  // Store
+  const {
+    records,
+    currentRecord,
+    createRecord,
+    deleteRecord,
+    setCurrentRecord,
+    updateStatus,
+    startAnalysis,
+    sendChatMessage,
+  } = useAnalysisStore();
+
+  // 项目 Store（获取当前激活的项目）
+  const { activeProject } = useProjectStore();
+
+  // 子页面状态
+  const [analysisView, setAnalysisView] = useState<'new' | 'history' | 'detail'>('new');
+
+  // 新建分析表单
+  const [description, setDescription] = useState('');
+  const [logId, setLogId] = useState('');
+  const [aiModel, setAiModel] = useState('deepseek-chat');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // 对话输入
+  const [chatInput, setChatInput] = useState('');
+  const [isSending, setIsSending] = useState(false);
+
+  // 状态选择
+  const [selectedStatus, setSelectedStatus] = useState<AnalysisStatus>('unconfirmed');
+  const [feedbackText, setFeedbackText] = useState('');
+
+  // 开始分析
+  const handleStartAnalysis = async () => {
+    if (!description.trim() || !logId.trim()) {
+      alert('请填写问题描述和日志 ID');
+      return;
+    }
+
+    if (!activeProject || !activeProject.id) {
+      alert('请先在项目管理中选择一个项目');
+      return;
+    }
+
+    // 创建记录
+    const record = createRecord({
+      description,
+      logId,
+      projectId: activeProject.id,
+      projectName: activeProject.name,
+      aiModel,
+    });
+
+    // 清空表单，跳转到详情
+    setDescription('');
+    setLogId('');
+    setCurrentRecord(record);
+    setAnalysisView('detail');
+    setIsAnalyzing(true);
+
+    // 调用真实的 AI 分析
+    try {
+      await startAnalysis(record.id);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // 发送对话消息
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || !currentRecord) return;
+
+    const userInput = chatInput;
+    setChatInput('');
+    setIsSending(true);
+
+    try {
+      await sendChatMessage(currentRecord.id, userInput);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // 保存状态
+  const handleSaveStatus = () => {
+    if (!currentRecord) return;
+    updateStatus(currentRecord.id, selectedStatus, feedbackText);
+    alert('状态已保存');
+  };
+
+  // 删除记录
+  const handleDelete = (id: string) => {
+    if (confirm('确定要删除这条分析记录吗？')) {
+      deleteRecord(id);
+    }
+  };
+
+  // 渲染新建分析表单
+  const renderNewAnalysis = () => (
+    <div className="max-w-2xl mx-auto">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h2 className="text-lg font-semibold text-gray-800">新建分析</h2>
+        </div>
+
+        <div className="p-6 space-y-5">
+          {/* 问题描述 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              问题描述 <span className="text-red-500">*</span>
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="请描述遇到的问题..."
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+            />
+          </div>
+
+          {/* 日志 ID */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              日志 ID <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={logId}
+              onChange={(e) => setLogId(e.target.value)}
+              placeholder="例如：LOG-20240115-001"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+
+          {/* 数据源（只读展示） */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">项目</label>
+            <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-gray-600">
+              {activeProject ? (
+                activeProject.name
+              ) : (
+                <span className="text-red-500">未选择项目</span>
+              )}
+            </div>
+          </div>
+
+          {/* 模块版本 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">模块版本</label>
+            <div className="bg-gray-50 border border-gray-200 rounded-md p-3 max-h-48 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-2">
+                {MODULE_VERSIONS.map((module) => (
+                  <div key={module.name} className="flex justify-between text-sm py-1 px-2 bg-white rounded">
+                    <span className="text-gray-700">{module.name}</span>
+                    <span className="text-gray-500 font-mono">{module.version}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* AI 模型 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">AI 模型</label>
+            <select
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              {AI_MODELS.map((model) => (
+                <option key={model.value} value={model.value}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 按钮 */}
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+            <button
+              onClick={() => {
+                setDescription('');
+                setLogId('');
+              }}
+              className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+            >
+              清空
+            </button>
+            <button
+              onClick={handleStartAnalysis}
+              disabled={!activeProject}
+              className="px-6 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span>▶</span>
+              <span>开始分析</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // 渲染分析历史
+  const renderHistory = () => (
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+        <h2 className="text-lg font-semibold text-gray-800">分析历史</h2>
+        <button
+          onClick={() => setAnalysisView('new')}
+          className="px-4 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors"
+        >
+          + 新建分析
+        </button>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">标题</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">描述</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {records.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
+                  暂无分析记录
+                </td>
+              </tr>
+            ) : (
+              records.map((record) => (
+                <tr key={record.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{record.title}</td>
+                  <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">{record.description}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{record.createdAt}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={record.status} />
+                  </td>
+                  <td className="px-4 py-3 space-x-2">
+                    <button
+                      onClick={() => {
+                        setCurrentRecord(record);
+                        setSelectedStatus(record.status);
+                        setFeedbackText(record.feedback || '');
+                        setAnalysisView('detail');
+                      }}
+                      className="text-blue-600 hover:text-blue-800 text-sm"
+                    >
+                      查看
+                    </button>
+                    <button
+                      onClick={() => handleDelete(record.id)}
+                      className="text-red-600 hover:text-red-800 text-sm"
+                    >
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  // 渲染分析详情
+  const renderDetail = () => {
+    if (!currentRecord) return null;
+
+    // 获取最新的记录数据
+    const record = records.find(r => r.id === currentRecord.id) || currentRecord;
+
+    return (
+      <div className="space-y-4">
+        {/* 返回按钮 */}
+        <button
+          onClick={() => {
+            setCurrentRecord(null);
+            setAnalysisView('history');
+          }}
+          className="text-blue-600 hover:text-blue-800 flex items-center gap-1"
+        >
+          ← 返回列表
+        </button>
+
+        {/* AI 分析结果 */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-800">AI 分析</h2>
+            {isAnalyzing && (
+              <span className="flex items-center text-sm text-blue-600">
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                AI 正在分析中...
+              </span>
+            )}
+          </div>
+          <div className="p-6 max-h-[500px] overflow-y-auto">
+            <div className="space-y-4">
+              {record.conversation.length > 0 ? (
+                record.conversation.map((msg) => (
+                  <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div
+                      className={`max-w-[80%] px-4 py-3 rounded-lg ${
+                        msg.role === 'user'
+                          ? 'bg-blue-500 text-white'
+                          : msg.role === 'tool'
+                          ? 'bg-amber-50 text-amber-900 border border-amber-200'
+                          : 'bg-gray-100 text-gray-800'
+                      }`}
+                    >
+                      <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                        {msg.content}
+                      </div>
+                      <div className={`text-xs mt-1 ${msg.role === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
+                        {msg.timestamp}
+                        {msg.name && ` • ${msg.name}`}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-gray-500 text-center">暂无分析结果</p>
+              )}
+
+              {(record.status === 'analyzing' || isAnalyzing) && (
+                <div className="flex items-center gap-2 text-gray-500">
+                  <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span>AI 正在分析中，请稍候...</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 对话输入 */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !isSending && handleSendMessage()}
+              placeholder="输入补充信息继续分析..."
+              disabled={isSending || isAnalyzing}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+            />
+            <button
+              onClick={handleSendMessage}
+              disabled={!chatInput.trim() || isSending || isAnalyzing}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {isSending && (
+                <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              )}
+              {isSending ? '发送中' : '发送'}
+            </button>
+          </div>
+        </div>
+
+        {/* 状态操作 */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div className="flex items-center gap-4">
+            <label className="text-sm font-medium text-gray-700">状态：</label>
+            <select
+              value={selectedStatus}
+              onChange={(e) => setSelectedStatus(e.target.value as AnalysisStatus)}
+              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="analyzing">分析中</option>
+              <option value="completed">已完成</option>
+              <option value="unconfirmed">未确认</option>
+              <option value="resolved">已解决</option>
+              <option value="unresolved">未解决</option>
+            </select>
+
+            {selectedStatus === 'unresolved' && (
+              <input
+                type="text"
+                value={feedbackText}
+                onChange={(e) => setFeedbackText(e.target.value)}
+                placeholder="请填写反馈..."
+                className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            )}
+
+            <button
+              onClick={handleSaveStatus}
+              className="px-4 py-1.5 bg-green-500 text-white text-sm rounded-md hover:bg-green-600 transition-colors"
+            >
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex-1 overflow-auto p-6 bg-gray-50">
+      {/* 子导航 */}
+      <div className="mb-4 flex gap-2">
+        <button
+          onClick={() => setAnalysisView('new')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            analysisView === 'new'
+              ? 'bg-blue-500 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          }`}
+        >
+          + 新建分析
+        </button>
+        <button
+          onClick={() => setAnalysisView('history')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            analysisView === 'history'
+              ? 'bg-blue-500 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          }`}
+        >
+          分析历史 {records.length > 0 && `(${records.length})`}
+        </button>
+      </div>
+
+      {/* 内容区域 */}
+      {analysisView === 'new' && renderNewAnalysis()}
+      {analysisView === 'history' && renderHistory()}
+      {analysisView === 'detail' && renderDetail()}
+    </div>
+  );
+}
+
+// 状态标签组件
+function StatusBadge({ status }: { status: AnalysisStatus }) {
+  const config: Record<AnalysisStatus, { text: string; className: string }> = {
+    analyzing: { text: '分析中', className: 'bg-blue-100 text-blue-800' },
+    completed: { text: '已完成', className: 'bg-green-100 text-green-800' },
+    unconfirmed: { text: '未确认', className: 'bg-gray-100 text-gray-800' },
+    resolved: { text: '已解决', className: 'bg-green-100 text-green-800' },
+    unresolved: { text: '未解决', className: 'bg-red-100 text-red-800' },
+  };
+
+  const { text, className } = config[status] || config.unconfirmed;
+
+  return (
+    <span className={`px-2 py-1 text-xs rounded-full ${className}`}>
+      {text}
+    </span>
   );
 }
 
