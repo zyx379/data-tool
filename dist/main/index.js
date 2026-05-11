@@ -8,16 +8,18 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const sqlite_1 = require("./database/sqlite");
 const handlers_1 = require("./ipc/handlers");
-const logDir = path_1.default.join(electron_1.app.getPath('userData'), 'logs');
-const logPath = path_1.default.join(logDir, 'main.log');
+let logDir;
+let logPath;
 function log(msg) {
     const timestamp = new Date().toISOString();
     const line = `[${timestamp}] [info] ${msg}\n`;
     try {
-        if (!fs_1.default.existsSync(logDir)) {
+        if (logDir && !fs_1.default.existsSync(logDir)) {
             fs_1.default.mkdirSync(logDir, { recursive: true });
         }
-        fs_1.default.appendFileSync(logPath, line);
+        if (logPath) {
+            fs_1.default.appendFileSync(logPath, line);
+        }
     }
     catch (e) {
         console.error('Failed to write log:', e);
@@ -110,6 +112,8 @@ function createWindow() {
     log('Window created');
 }
 electron_1.app.whenReady().then(async () => {
+    logDir = path_1.default.join(electron_1.app.getPath('userData'), 'logs');
+    logPath = path_1.default.join(logDir, 'main.log');
     log('App ready');
     createMenu();
     try {
