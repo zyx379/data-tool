@@ -1,0 +1,657 @@
+{
+  "code": "00000",
+  "data": [
+    {
+      "name": "common-log-service",
+      "cNName": "通用日志后端",
+      "deployTime": 1761550717000,
+      "type": 0,
+      "version": "release-0.0.24",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "unified-config-service",
+      "cNName": "统一配置后端",
+      "deployTime": 1760173626000,
+      "type": 0,
+      "version": "release-0.0.439",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "unified-config-web",
+      "cNName": "统一配置前端",
+      "deployTime": 1760173626000,
+      "type": 1,
+      "version": "release-0.0.451",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "medcalldisplay-service",
+      "cNName": "拿药取号后端",
+      "deployTime": 1741049978000,
+      "type": 0,
+      "version": "release-0.0.34.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "archive-web",
+      "cNName": "病案前端",
+      "deployTime": 1778481877000,
+      "type": 1,
+      "version": "release-1.44.61",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "billreport-web",
+      "cNName": "票据前端",
+      "deployTime": 1768267574000,
+      "type": 1,
+      "version": "release-0.0.49",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "browser-service",
+      "cNName": "浏览器管理后端",
+      "deployTime": 1778054887000,
+      "type": 0,
+      "version": "release-0.0.24",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "browser-web",
+      "cNName": "浏览器管理前端",
+      "deployTime": 1745951557000,
+      "type": 1,
+      "version": "release-0.0.17",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "bus-log-service",
+      "cNName": "日志后端",
+      "deployTime": 1778064590000,
+      "type": 0,
+      "version": "release-0.0.1",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "bus-log-web",
+      "cNName": "日志前端",
+      "deployTime": 1745951556000,
+      "type": 1,
+      "version": "release-1.0.3",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "charge-service",
+      "cNName": "收费后端",
+      "deployTime": 1778484671000,
+      "type": 0,
+      "version": "release-1.170.25.fj-common",
+      "deployType": 0,
+      "status": "1"
+    },
+    {
+      "name": "cis-adapter-service",
+      "cNName": "HIS适配后端",
+      "deployTime": 1778140592000,
+      "type": 0,
+      "version": "release-1.44.19",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "cis-archive-service",
+      "cNName": "病案后端",
+      "deployTime": 1778481877000,
+      "type": 0,
+      "version": "release-1.44.43",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "cis-doctor-service",
+      "cNName": "医生后端",
+      "deployTime": 1778481877000,
+      "type": 0,
+      "version": "release-1.44.109",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "cis-nurse-service",
+      "cNName": "护士后端",
+      "deployTime": 1778308140000,
+      "type": 0,
+      "version": "release-1.44.74",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "cis-outpatient-service",
+      "cNName": "门诊后端",
+      "deployTime": 1778481877000,
+      "type": 0,
+      "version": "release-1.44.15",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "clinicpath-web",
+      "cNName": "临床路径前端",
+      "deployTime": 1777192481000,
+      "type": 1,
+      "version": "release-0.0.195.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "config-manage-service",
+      "cNName": "配置服务后端",
+      "deployTime": 1778141975000,
+      "type": 0,
+      "version": "release-1.14.106",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "config-manage-web",
+      "cNName": "配置管理前端",
+      "deployTime": 1778308140000,
+      "type": 1,
+      "version": "release-1.14.181",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "cvt-service",
+      "cNName": "病历转换服务",
+      "deployTime": 1776048533000,
+      "type": 0,
+      "version": "release-0.0.17",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "data-handle-service",
+      "cNName": "数据管理后端",
+      "deployTime": 1764230211000,
+      "type": 0,
+      "version": "release-0.0.353",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "data-handle-web",
+      "cNName": "数据管理前端",
+      "deployTime": 1722310755000,
+      "type": 1,
+      "version": "release-0.0.241",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-app-service",
+      "cNName": "数据中心应用后端",
+      "deployTime": 1760420296000,
+      "type": 0,
+      "version": "release-1.3.571",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-app-web",
+      "cNName": "数据中心应用前端",
+      "deployTime": 1760420296000,
+      "type": 1,
+      "version": "release-1.3.512",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-compute-service",
+      "cNName": "数据中心计算服务",
+      "deployTime": 1778064567000,
+      "type": 0,
+      "version": "release-1.3.17",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-query-service",
+      "cNName": "数据中心统一查询服务",
+      "deployTime": 1778056318000,
+      "type": 0,
+      "version": "release-1.3.0",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-report-service",
+      "cNName": "数据上报后台服务",
+      "deployTime": 1768463674000,
+      "type": 0,
+      "version": "release-1.3.305",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-service",
+      "cNName": "数据中心后端",
+      "deployTime": 1778056097000,
+      "type": 0,
+      "version": "release-1.3.113",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-third-service",
+      "cNName": "数据中心第三方服务",
+      "deployTime": 1775039815000,
+      "type": 0,
+      "version": "release-1.3.67",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "dc-web",
+      "cNName": "数据中心前端",
+      "deployTime": 1776938388000,
+      "type": 1,
+      "version": "release-1.3.161",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "doctor-web",
+      "cNName": "医生前端",
+      "deployTime": 1778481877000,
+      "type": 1,
+      "version": "release-1.44.143",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "emr-third-adapter-service",
+      "cNName": "第三方适配后端",
+      "deployTime": 1778140219000,
+      "type": 0,
+      "version": "release-1.44.10",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "gateway-service",
+      "cNName": "业务网关",
+      "deployTime": 1778308257000,
+      "type": 0,
+      "version": "release-1.1.29",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "his-charge-web",
+      "cNName": "收费前端",
+      "deployTime": 1778484671000,
+      "type": 1,
+      "version": "release-0.0.1302.fj-common",
+      "deployType": 0,
+      "status": "1"
+    },
+    {
+      "name": "his-drug-web",
+      "cNName": "药剂前端",
+      "deployTime": 1778484671000,
+      "type": 1,
+      "version": "release-0.0.897.fj-common",
+      "deployType": 0,
+      "status": "1"
+    },
+    {
+      "name": "insurance-service",
+      "cNName": "医保后端",
+      "deployTime": 1773813931000,
+      "type": 0,
+      "version": "release-0.0.266.fj-ybcommon",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "intellisense-service",
+      "cNName": "智能书写后端",
+      "deployTime": 1773392081000,
+      "type": 0,
+      "version": "release-0.0.0.20230203115704",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "intellisense-web",
+      "cNName": "智能书写前端",
+      "deployTime": 1774339908000,
+      "type": 1,
+      "version": "release-0.0.0.20230203115658",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "log-manage-service",
+      "cNName": "应用日志后端",
+      "deployTime": 1778484708000,
+      "type": 0,
+      "version": "release-1.1.118",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "message-admin-service",
+      "cNName": "消息中心后台服务",
+      "deployTime": 1772419090000,
+      "type": 0,
+      "version": "release-1.3.32",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "message-app-service",
+      "cNName": "消息中心应用服务",
+      "deployTime": 1766991688000,
+      "type": 0,
+      "version": "release-1.7.1",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "message-consumer-service",
+      "cNName": "消息中心消费者服务",
+      "deployTime": 1766023395000,
+      "type": 0,
+      "version": "release-1.6.3",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "nurse-web",
+      "cNName": "护士前端",
+      "deployTime": 1778481877000,
+      "type": 1,
+      "version": "release-1.44.101",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "optimus-service",
+      "cNName": "公共后端",
+      "deployTime": 1778428852000,
+      "type": 0,
+      "version": "release-1.156.56.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "outp-web",
+      "cNName": "门诊前端",
+      "deployTime": 1778484671000,
+      "type": 1,
+      "version": "release-0.0.1016.fj-common",
+      "deployType": 0,
+      "status": "1"
+    },
+    {
+      "name": "pcp-service",
+      "cNName": "页面定制后端",
+      "deployTime": 1749785003000,
+      "type": 0,
+      "version": "release-0.0.41.1",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "pcp-web",
+      "cNName": "页面定制前端",
+      "deployTime": 1751595754000,
+      "type": 1,
+      "version": "release-0.0.63",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "portal-service",
+      "cNName": "门户后端",
+      "deployTime": 1777363339000,
+      "type": 0,
+      "version": "release-1.7.544",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "portal-web",
+      "cNName": "门户前端",
+      "deployTime": 1776823989000,
+      "type": 1,
+      "version": "release-1.7.568",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "pres-service",
+      "cNName": "医嘱后端",
+      "deployTime": 1778484671000,
+      "type": 0,
+      "version": "release-0.0.1489.fj-common",
+      "deployType": 0,
+      "status": "1"
+    },
+    {
+      "name": "pres-web",
+      "cNName": "医嘱前端",
+      "deployTime": 1778428852000,
+      "type": 1,
+      "version": "release-1.156.85.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "qc-service",
+      "cNName": "质控后端",
+      "deployTime": 1775006588000,
+      "type": 0,
+      "version": "release-0.0.168",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "qc-web",
+      "cNName": "病历质控前端",
+      "deployTime": 1775006588000,
+      "type": 1,
+      "version": "release-0.0.175",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "quartz-service",
+      "cNName": "定时器后端（已作废）",
+      "deployTime": 1773108057000,
+      "type": 0,
+      "version": "release-0.0.2",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "report-mng-service",
+      "cNName": "帆软报表管理后端",
+      "deployTime": 1745958624000,
+      "type": 0,
+      "version": "release-0.0.26",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "report-mng-web",
+      "cNName": "帆软报表管理前端",
+      "deployTime": 1745951565000,
+      "type": 1,
+      "version": "release-0.0.20",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "template-service",
+      "cNName": "模板后端",
+      "deployTime": 1778141975000,
+      "type": 0,
+      "version": "release-0.0.279",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "template-web",
+      "cNName": "模板前端",
+      "deployTime": 1778141975000,
+      "type": 1,
+      "version": "release-0.0.282",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "xxl-job-service",
+      "cNName": "新版定时器",
+      "deployTime": 1776938467000,
+      "type": 0,
+      "version": "release-0.0.16",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "storage-service",
+      "cNName": "云存储后端",
+      "deployTime": 1745959308000,
+      "type": 0,
+      "version": "release-0.0.4",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "zipkin-server",
+      "cNName": "分布式链路追踪系统",
+      "deployTime": 1745951578000,
+      "type": 0,
+      "version": "release-2.24.1.5",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "ward-web",
+      "cNName": "病房管理前端",
+      "deployTime": 1769996659000,
+      "type": 1,
+      "version": "release-1.0.11.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "ward-service",
+      "cNName": "病房管理后端",
+      "deployTime": 1769996659000,
+      "type": 0,
+      "version": "release-1.0.13.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "bumblebee-service",
+      "cNName": "公用后端兼容版",
+      "deployTime": 1776840995000,
+      "type": 0,
+      "version": "release-1.5.48.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "bumblebee-web",
+      "cNName": "公用前端兼容版",
+      "deployTime": 1766024799000,
+      "type": 1,
+      "version": "release-0.0.49.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "integrated-query-service",
+      "cNName": "公用查询后端",
+      "deployTime": 1764230376000,
+      "type": 0,
+      "version": "release-0.0.209",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "integrated-query-web",
+      "cNName": "公用查询前端",
+      "deployTime": 1727255689000,
+      "type": 1,
+      "version": "release-0.0.137",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "cis-paperless-service",
+      "cNName": "无纸化病案后端",
+      "deployTime": 1764229846000,
+      "type": 0,
+      "version": "release-1.4.7",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "billreport-service",
+      "cNName": "票据后端",
+      "deployTime": 1776045696000,
+      "type": 0,
+      "version": "release-0.0.73",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "examination-service",
+      "cNName": "体检公共后端",
+      "deployTime": 1778253551000,
+      "type": 0,
+      "version": "release-0.0.363.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "examination-web",
+      "cNName": "体检后台前端",
+      "deployTime": 1778243596000,
+      "type": 1,
+      "version": "release-0.0.307.fj-common",
+      "deployType": 0,
+      "status": "3"
+    },
+    {
+      "name": "examination-outer",
+      "cNName": "体检小程序后端",
+      "deployTime": 1772618000000,
+      "type": 0,
+      "version": "release-1.0.3.fj-common",
+      "deployType": 0,
+      "status": "3"
+    }
+  ],
+  "message": "",
+  "error": "",
+  "traceId": "01107da1694f7f1b",
+  "guide": ""
+}

@@ -52,12 +52,16 @@ export interface SchemaProgress {
   phase: 'loading' | 'processing' | 'complete' | 'error';
 }
 
-interface SavedQueryConditionTemplate {
+export type SavedConditionJoin = 'AND' | 'OR';
+
+export interface SavedQueryConditionTemplate {
   id: string;
   name: string;
   tableName: string;
   columns: string[];
   operators: string[];
+  /** 与上一行的连接，长度应为 columns.length - 1；缺省表示全部为 AND */
+  joins?: SavedConditionJoin[];
   createdAt: string;
 }
 
@@ -113,81 +117,15 @@ interface DataSourceStore {
   setColumnSearchTerm: (value: string) => void;
   toggleSidebar: () => void;
   toggleTableList: () => void;
-  saveQueryConditionTemplate: (name: string, tableName: string, columns: string[], operators: string[]) => void;
+  saveQueryConditionTemplate: (
+    name: string,
+    tableName: string,
+    columns: string[],
+    operators: string[],
+    joins?: SavedConditionJoin[]
+  ) => void;
   deleteQueryConditionTemplate: (id: string) => void;
   getQueryConditionTemplatesForTable: (tableName: string) => SavedQueryConditionTemplate[];
-}
-
-declare global {
-  interface Window {
-    electronAPI: {
-      getDataSources: () => Promise<any[]>;
-      createDataSource: (ds: any) => Promise<any>;
-      updateDataSource: (id: string, ds: any) => Promise<any>;
-      deleteDataSource: (id: string) => Promise<void>;
-      setActiveDataSource: (id: string) => Promise<void>;
-      getActiveDataSource: () => Promise<any>;
-      testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
-      getQueryHistory: () => Promise<any[]>;
-      clearQueryHistory: () => Promise<void>;
-      getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean, filterEmptyTables?: boolean) => Promise<TableInfo[]>;
-      getSchemaFromCache: (dataSourceId: string) => Promise<TableInfo[]>;
-      executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
-      onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
-      cancelSchemaLoad: () => Promise<void>;
-      removeTableFromCache: (dataSourceId: string, tableName: string) => Promise<void>;
-      removeTablesFromCache: (dataSourceId: string, tableNames: string[]) => Promise<void>;
-      startAnalysis: (request: {
-        description: string;
-        logId: string;
-        projectId: string;
-        aiModel: string;
-      }) => Promise<{
-        success: boolean;
-        message: string;
-        conversation: Array<{
-          role: string;
-          content: string;
-          toolCalls?: any[];
-          toolCallId?: string;
-          name?: string;
-        }>;
-      }>;
-      chatWithAI: (message: string, projectId: string) => Promise<{
-        success: boolean;
-        message: string;
-        conversation: Array<{
-          role: string;
-          content: string;
-          toolCalls?: any[];
-          toolCallId?: string;
-          name?: string;
-        }>;
-      }>;
-      setGitLabConfig: (config: { baseUrl: string; token: string; defaultBranch?: string }) => Promise<{ success: boolean; message: string }>;
-      onAIStream: (callback: (content: string) => void) => () => void;
-      project: {
-        getAll: () => Promise<any[]>;
-        getById: (id: string) => Promise<any>;
-        create: (project: { name: string; description?: string; isActive?: number }) => Promise<any>;
-        update: (id: string, project: any) => Promise<any>;
-        delete: (id: string) => Promise<void>;
-        setActive: (id: string) => Promise<void>;
-        getActive: () => Promise<any>;
-        getActiveWithDetails: () => Promise<any>;
-        getDataSources: (projectId: string) => Promise<any[]>;
-        getDataSourceById: (id: string) => Promise<any>;
-        createDataSource: (ds: any) => Promise<any>;
-        updateDataSource: (id: string, ds: any) => Promise<any>;
-        deleteDataSource: (id: string) => Promise<void>;
-        getConfig: (projectId: string) => Promise<any>;
-        saveConfig: (config: any) => Promise<any>;
-        deleteConfig: (projectId: string) => Promise<void>;
-        testDataSourceConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
-        executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
-      };
-    };
-  }
 }
 
 export const useDataSourceStore = create<DataSourceStore>()(
@@ -210,7 +148,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       schemaFilterHistory: [],
       abortController: null,
       schemaProgress: null,
-      filterEmptyTables: false,
+      filterEmptyTables: true,
       savedQueryConditionTemplates: [],
 
       loadDataSources: async () => {
@@ -294,7 +232,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
 
         const processedSchema: TableInfo[] = filteredSchema.map(table => ({
           ...table,
-          columns: table.columns.map(col => ({
+          columns: table.columns.map((col: TableColumn) => ({
             ...col,
             isUsed: col.isUsed ?? (col.hasData && !col.isPrimaryKey),
           })),
@@ -334,7 +272,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
         if (schema.length > 0) {
           const processedSchema: TableInfo[] = schema.map(table => ({
             ...table,
-            columns: table.columns.map(col => ({
+            columns: table.columns.map((col: TableColumn) => ({
               ...col,
               isUsed: col.isUsed ?? (col.hasData && !col.isPrimaryKey),
             })),
@@ -462,7 +400,8 @@ export const useDataSourceStore = create<DataSourceStore>()(
       },
 
       getShowOnlyUsedFieldsByTable: (tableKey) => {
-        return get().showOnlyUsedFieldsByTable[tableKey] || false;
+        const value = get().showOnlyUsedFieldsByTable[tableKey];
+        return value !== undefined ? value : true;
       },
 
       setColumnSearchTerm: (value) => {
@@ -477,13 +416,14 @@ export const useDataSourceStore = create<DataSourceStore>()(
         set((state) => ({ tableListCollapsed: !state.tableListCollapsed }));
       },
 
-      saveQueryConditionTemplate: (name, tableName, columns, operators) => {
+      saveQueryConditionTemplate: (name, tableName, columns, operators, joins) => {
         const template: SavedQueryConditionTemplate = {
           id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           name,
           tableName,
           columns,
           operators,
+          ...(joins && joins.length > 0 ? { joins } : {}),
           createdAt: new Date().toISOString(),
         };
         set((state) => ({

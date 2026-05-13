@@ -39,7 +39,16 @@ function createMenu() {
             label: '视图',
             submenu: [
                 { role: 'reload', label: '刷新' },
-                { role: 'toggleDevTools', label: '开发者工具' },
+                { label: '开发者工具', click: () => {
+                        if (mainWindow) {
+                            if (mainWindow.webContents.isDevToolsOpened()) {
+                                mainWindow.webContents.closeDevTools();
+                            }
+                            else {
+                                mainWindow.webContents.openDevTools({ mode: 'detach' });
+                            }
+                        }
+                    } },
                 { type: 'separator' },
                 { role: 'togglefullscreen', label: '全屏' }
             ]
@@ -86,25 +95,48 @@ function createWindow() {
     const isDev = process.env.NODE_ENV === 'development' || !electron_1.app.isPackaged;
     log(`Is development: ${isDev}`);
     if (isDev) {
-        log('Loading dev URL: http://localhost:5173');
-        mainWindow.loadURL('http://localhost:5173');
-        mainWindow.webContents.openDevTools({ mode: 'detach' });
+        // 尝试的端口列表
+        const devPorts = [5173, 5174, 5175, 5176, 5177];
+        let currentPortIndex = 0;
+        const tryLoadDevUrl = () => {
+            if (currentPortIndex >= devPorts.length) {
+                log('所有开发端口都尝试失败，请检查Vite服务是否运行');
+                return;
+            }
+            const port = devPorts[currentPortIndex];
+            const devUrl = `http://localhost:${port}`;
+            log(`尝试加载开发URL: ${devUrl}`);
+            mainWindow.loadURL(devUrl);
+        };
+        // 设置失败重试逻辑
+        mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+            log(`窗口加载失败: ${errorCode} - ${errorDescription}`);
+            // 如果是开发环境且加载的是开发URL，尝试下一个端口
+            if (isDev) {
+                currentPortIndex++;
+                if (currentPortIndex < devPorts.length) {
+                    log(`尝试下一个端口...`);
+                    setTimeout(tryLoadDevUrl, 100); // 稍等再试
+                }
+                else {
+                    log(`所有开发端口都尝试失败，请确保Vite服务正在运行`);
+                }
+            }
+        });
+        // 首次尝试加载
+        tryLoadDevUrl();
     }
     else {
         const htmlPath = path_1.default.join(__dirname, '../renderer/index.html');
-        log(`Loading production file: ${htmlPath}`);
-        log(`File exists: ${fs_1.default.existsSync(htmlPath)}`);
+        log(`加载生产文件: ${htmlPath}`);
+        log(`文件存在: ${fs_1.default.existsSync(htmlPath)}`);
         mainWindow.loadFile(htmlPath);
-        mainWindow.webContents.on('dom-ready', () => {
-            log('DOM ready, opening dev tools');
-            mainWindow?.webContents.openDevTools({ mode: 'detach' });
-        });
     }
     mainWindow.webContents.on('did-finish-load', () => {
-        log('Window finished loading');
-    });
-    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-        log(`Window failed to load: ${errorCode} - ${errorDescription}`);
+        log('窗口加载完成');
+        if (isDev) {
+            mainWindow.webContents.openDevTools({ mode: 'detach' });
+        }
     });
     mainWindow.on('closed', () => {
         mainWindow = null;

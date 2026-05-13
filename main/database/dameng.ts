@@ -14,6 +14,7 @@ export interface TableColumn {
   isPrimaryKey: boolean;
   hasData?: boolean;
   dataPercentage?: number;
+  isUsed?: boolean;
 }
 
 export interface TableIndex {
@@ -229,6 +230,9 @@ export async function getDamengTables(
         columns[j].dataPercentage = dataResult[j]?.percentage || 0;
         if (dataResult[j]?.hasData) {
           hasTableData = true;
+        }
+        if (columns[j].isPrimaryKey) {
+          columns[j].isUsed = true;
         }
       }
 

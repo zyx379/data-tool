@@ -8,6 +8,7 @@ export interface TableColumn {
     isPrimaryKey: boolean;
     hasData?: boolean;
     dataPercentage?: number;
+    isUsed?: boolean;
 }
 export interface TableIndex {
     indexName: string;

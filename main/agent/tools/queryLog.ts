@@ -1,119 +1,182 @@
-import { getDataSourceById } from '../../database/sqlite';
-import { executeOracleQuery, OracleConnectionParams } from '../../database/oracle';
-import { executeDamengQuery, DamengConnectionParams } from '../../database/dameng';
-import { LogInfo, ToolResult } from '../types';
+import { ApiClient, LogQueryParam } from '../../api-client';
+import { getProjectConfig } from '../../database/sqlite';
+import { getFirstTokenFromRedis, RedisConfig } from '../../redis';
+import { ToolResult } from '../types';
 
 export async function queryLog(
-  logId: string,
-  dataSourceId: string,
-  tableName: string = 'HIS_LOG'
+  args: { logId: string; tableName?: string },
+  projectId: string,
+  apiBaseUrl?: string,
+  apiToken?: string,
+  apiLogPath?: string,
+  apiTokenPath?: string
 ): Promise<ToolResult> {
   try {
-    const ds = getDataSourceById(dataSourceId);
-    if (!ds) {
-      return { success: false, error: '数据源不存在' };
-    }
+    let configToUse: { baseUrl: string; logPath?: string } | undefined;
+    let tokenToUse: string | undefined;
 
-    let sql: string;
-    if (ds.type === 'oracle') {
-      sql = `SELECT * FROM ${tableName} WHERE LOG_ID = '${logId}'`;
-    } else if (ds.type === 'dameng') {
-      sql = `SELECT * FROM "${tableName}" WHERE LOG_ID = '${logId}'`;
+    if (apiBaseUrl && apiLogPath) {
+      configToUse = { baseUrl: apiBaseUrl, logPath: apiLogPath };
+      tokenToUse = apiToken;
     } else {
-      return { success: false, error: '不支持的数据库类型' };
-    }
-
-    let result;
-    if (ds.type === 'oracle') {
-      const params: OracleConnectionParams = {
-        host: ds.host,
-        port: ds.port,
-        serviceName: ds.serviceName,
-        sid: ds.sid,
-        username: ds.username,
-        password: ds.password,
-        schema: ds.schema,
-      };
-      result = await executeOracleQuery(params, sql);
-    } else {
-      const params: DamengConnectionParams = {
-        host: ds.host,
-        port: ds.port,
-        schema: ds.schema || ds.username,
-        username: ds.username,
-        password: ds.password,
-      };
-      result = await executeDamengQuery(params, sql);
-    }
-
-    if (result.rows.length === 0) {
-      return { success: false, error: `未找到日志ID: ${logId}` };
-    }
-
-    const columns = result.columns;
-    const row = result.rows[0];
-    
-    const logInfo: LogInfo = {
-      logId: logId,
-      content: '',
-    };
-
-    for (let i = 0; i < columns.length; i++) {
-      const colName = columns[i].toUpperCase();
-      const value = row[i];
-      
-      if (colName === 'LOG_ID') {
-        logInfo.logId = String(value || '');
-      } else if (colName === 'CONTENT' || colName === 'LOG_CONTENT' || colName === 'MESSAGE') {
-        logInfo.content = String(value || '');
-      } else if (colName === 'SERVICE_NAME' || colName === 'SERVICENAME') {
-        logInfo.serviceName = String(value || '');
-      } else if (colName === 'PAGE_PATH' || colName === 'PAGEPATH' || colName === 'PAGE') {
-        logInfo.pagePath = String(value || '');
-      } else if (colName === 'ERROR_MESSAGE' || colName === 'ERRORMESSAGE' || colName === 'ERROR') {
-        logInfo.errorMessage = String(value || '');
-      } else if (colName === 'TIMESTAMP' || colName === 'CREATE_TIME' || colName === 'CREATETIME') {
-        logInfo.timestamp = String(value || '');
-      } else {
-        logInfo[colName] = value;
+      const projectConfig = getProjectConfig(projectId);
+      if (projectConfig && projectConfig.apiBaseUrl && projectConfig.apiLogPath) {
+        configToUse = {
+          baseUrl: projectConfig.apiBaseUrl,
+          logPath: projectConfig.apiLogPath,
+        };
       }
     }
 
-    if (!logInfo.content && Object.keys(logInfo).length > 1) {
-      logInfo.content = JSON.stringify(logInfo, null, 2);
+    if (!tokenToUse) {
+      const projectConfig = getProjectConfig(projectId);
+      if (projectConfig && projectConfig.redisHost && projectConfig.redisPort) {
+        const redisConfig: RedisConfig = {
+            host: projectConfig.redisHost!,
+            port: projectConfig.redisPort!,
+            password: projectConfig.redisPassword || undefined,
+            db: projectConfig.redisDb || undefined,
+          };
+          tokenToUse = await getFirstTokenFromRedis(redisConfig) ?? undefined;
+      }
     }
 
-    return { success: true, data: logInfo };
+    if (!configToUse) {
+      return { success: false, error: '项目未配置 API，无法查询日志' };
+    }
+
+    const apiClient = new ApiClient(configToUse);
+    if (tokenToUse) {
+      apiClient.setToken(tokenToUse);
+    }
+
+    const queryParam: LogQueryParam = {
+      pageSize: '50',
+      pageNum: '1',
+      indexvalue: 'log-http*',
+      logType: 'http',
+      serviceName: '',
+      canary: '',
+      traceId: args.logId,
+      logLevel: [],
+      timestamp: { startDate: null, endDate: null },
+      filterParam: {
+        searchType: '2',
+        termChecked: false,
+        matchChecked: true,
+        wildcardChecked: false,
+        operator: '',
+        value: '',
+        searchValue: args.logId
+      }
+    };
+
+    console.log('queryLog queryParam:', JSON.stringify(queryParam, null, 2));
+
+    const result = await apiClient.getLogs(queryParam);
+
+    if (result.logs.length === 0) {
+      return { success: false, error: '未找到匹配的日志' };
+    }
+
+    const allLogs = result.logs;
+    const errorLogs = allLogs.filter(l => {
+      const level = (l.logLevel || '').toUpperCase();
+      return level.includes('ERROR') || level.includes('WARN');
+    });
+
+    return {
+      success: true,
+      data: {
+        logId: args.logId,
+        totalCount: allLogs.length,
+        errorCount: errorLogs.length,
+        allLogs: allLogs,
+        errorLogs: errorLogs,
+        logs: allLogs,
+      }
+    };
   } catch (error) {
-    console.error('Query log error:', error);
+    console.error('queryLog error:', error);
     return { success: false, error: (error as Error).message };
   }
 }
 
-export function buildLogQueryPrompt(logId: string, logInfo: LogInfo): string {
-  let prompt = `## 日志查询结果\n\n`;
-  prompt += `**日志ID**: ${logInfo.logId}\n\n`;
-  
-  if (logInfo.serviceName) {
-    prompt += `**服务名称**: ${logInfo.serviceName}\n`;
-  }
-  if (logInfo.pagePath) {
-    prompt += `**页面路径**: ${logInfo.pagePath}\n`;
-  }
-  if (logInfo.errorMessage) {
-    prompt += `**错误信息**: ${logInfo.errorMessage}\n`;
-  }
-  if (logInfo.timestamp) {
-    prompt += `**时间戳**: ${logInfo.timestamp}\n`;
-  }
-  
-  prompt += `\n**日志内容**:\n\`\`\`\n${logInfo.content}\n\`\`\`\n\n`;
-  
-  prompt += `请分析以上日志内容，提取关键信息：\n`;
-  prompt += `1. 错误类型和错误码\n`;
-  prompt += `2. 相关的业务模块\n`;
-  prompt += `3. 可能的根本原因\n`;
-  prompt += `4. 建议的后续操作\n`;
+export function buildLogQueryPrompt(args: { logId: string }, data: any): string {
+  const errorLogs = data.errorLogs || [];
+  const allLogs = data.allLogs || [];
+  const totalCount = data.totalCount || allLogs.length;
+  const errorCount = data.errorCount || errorLogs.length;
 
+  let prompt = `## 日志查询结果\n\n`;
+  prompt += `**日志ID**: ${args.logId}\n`;
+  prompt += `**总日志数**: ${totalCount}\n`;
+  prompt += `**异常日志数 (ERROR/WARN)**: ${errorCount}\n\n`;
+
+  if (errorLogs.length === 0) {
+    prompt += `✅ 未发现异常日志，所有日志均为 INFO 或 DEBUG 级别。\n\n`;
+    prompt += `### 日志摘要\n`;
+    allLogs.slice(0, 5).forEach((log: any, index: number) => {
+      prompt += `\n**#${index + 1}** [${log.logLevel}]\n`;
+      if (log.serviceName) prompt += `- 服务: ${log.serviceName}\n`;
+      if (log.reqUrl) prompt += `- 请求: ${log.reqUrl}\n`;
+      if (log.httpStatus) prompt += `- 状态码: ${log.httpStatus}\n`;
+    });
+    prompt += `\n虽然没有明显的异常日志，但请检查请求参数、状态码和响应时间，排查是否存在业务逻辑问题或性能瓶颈。`;
+    return prompt;
+  }
+
+  prompt += `### ⚠️ 异常日志详情\n\n`;
+  errorLogs.forEach((log: any, index: number) => {
+    prompt += `---\n`;
+    prompt += `#### 异常 #${index + 1}\n\n`;
+    prompt += `| 字段 | 值 |\n`;
+    prompt += `|------|----|\n`;
+    if (log.logLevel) prompt += `| **日志级别** | ${log.logLevel} |\n`;
+    if (log.serviceName) prompt += `| **服务名** | ${log.serviceName} |\n`;
+    if (log.reqUrl) prompt += `| **请求URL** | ${log.reqUrl} |\n`;
+    if (log.httpStatus) prompt += `| **状态码** | ${log.httpStatus} |\n`;
+    if (log.httpMethod) prompt += `| **请求方法** | ${log.httpMethod} |\n`;
+    if (log.errorClass) prompt += `| **错误类名** | ${log.errorClass} |\n`;
+    if (log.errorMessage) prompt += `| **错误信息** | ${log.errorMessage} |\n`;
+    if (log.vueFile) prompt += `| **Vue文件** | ${log.vueFile} |\n`;
+    if (log.stackTrace) {
+      const stackLines = log.stackTrace.split('\n').slice(0, 5).join('\n');
+      prompt += `| **堆栈** | \n\`\`\`\n${stackLines}\n\`\`\` |\n`;
+    }
+    if (log.requestParams) prompt += `| **请求参数** | \`\`\`json\n${log.requestParams}\n\`\`\` |\n`;
+    prompt += `\n`;
+  });
+
+  prompt += `\n---\n`;
+  prompt += `请重点分析以上异常日志，根据错误类型、堆栈信息和服务名判断问题根因。`;
   return prompt;
+}
+
+export function buildSimpleLogDisplay(data: any): string {
+  const errorLogs = data.errorLogs || [];
+  const totalCount = data.totalCount || 0;
+  const errorCount = data.errorCount || errorLogs.length;
+
+  let display = `共找到 ${totalCount} 条日志`;
+
+  if (errorCount === 0) {
+    display += `，未发现异常日志（ERROR/WARN）。`;
+    return display;
+  }
+
+  display += `，其中 ${errorCount} 条异常：\n\n`;
+
+  errorLogs.forEach((log: any, index: number) => {
+    const level = log.logLevel || 'UNKNOWN';
+    display += `### ${level}: ${log.serviceName || '未知服务'}\n`;
+    if (log.reqUrl) display += `- 请求: ${log.reqUrl}\n`;
+    if (log.httpStatus) display += `- 状态码: ${log.httpStatus}\n`;
+    if (log.errorClass) display += `- 错误类型: ${log.errorClass}\n`;
+    if (log.errorMessage) display += `- 错误信息: ${log.errorMessage}\n`;
+    if (log.vueFile) display += `- Vue文件: ${log.vueFile}\n`;
+    if (index < errorLogs.length - 1) display += `\n`;
+  });
+
+  return display;
 }

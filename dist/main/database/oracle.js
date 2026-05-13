@@ -201,6 +201,9 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
                 if (dataResult[j]?.hasData && !columns[j].isPrimaryKey) {
                     columns[j].isUsed = true;
                 }
+                if (columns[j].isPrimaryKey) {
+                    columns[j].isUsed = true;
+                }
             }
             if (!filterEmptyTables || hasTableData) {
                 tables.push({
@@ -237,7 +240,6 @@ async function getOracleTables(params, onProgress, ownerFilter, tableNamePattern
 }
 const SAMPLE_SIZE = 1000;
 async function checkColumnData(connection, owner, tableName, columns, abortSignal) {
-    console.log('[checkColumnData] START:', owner, tableName, 'columns:', columns.length);
     if (abortSignal?.aborted) {
         throw new Error('Operation cancelled');
     }
@@ -257,7 +259,6 @@ async function checkColumnData(connection, owner, tableName, columns, abortSigna
         const rows = (result.rows || []);
         const totalRows = rows.length;
         if (totalRows === 0) {
-            console.log('[checkColumnData] No rows for', owner, tableName);
             return columns.map(() => ({ hasData: false, percentage: 0 }));
         }
         const columnResults = [];
@@ -277,16 +278,26 @@ async function checkColumnData(connection, owner, tableName, columns, abortSigna
                 percentage,
             });
         }
-        console.log('[checkColumnData] DONE:', owner, tableName, 'results:', columnResults.filter(r => r.hasData).length, 'columns with data');
         return columnResults;
     }
     catch (error) {
         if (error.message === 'Operation cancelled') {
             throw error;
         }
-        console.warn('[checkColumnData] ERROR:', owner, tableName, error);
         return columns.map(() => ({ hasData: false, percentage: 0 }));
     }
+}
+function serializeRowValue(value) {
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+    if (typeof value === 'bigint') {
+        return value.toString();
+    }
+    if (Buffer.isBuffer(value)) {
+        return value.toString('base64');
+    }
+    return value;
 }
 async function executeOracleQuery(params, sql) {
     let connection = null;
@@ -303,7 +314,8 @@ async function executeOracleQuery(params, sql) {
         });
         const executionTime = Date.now() - startTime;
         const columns = (result.metaData || []).map((col) => col.name);
-        const rows = (result.rows || []);
+        const rawRows = (result.rows || []);
+        const rows = rawRows.map(row => row.map(serializeRowValue));
         const rowCount = rows.length;
         await connection.close();
         return { columns, rows, rowCount, executionTime };

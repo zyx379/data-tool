@@ -1,44 +1,333 @@
-import { ipcMain } from 'electron';
+import { ipcMain, BrowserWindow } from 'electron';
 import {
-  getAllDataSources,
+  createAgent,
+  AnalysisRequest,
+  AnalysisStepData,
+  AnalysisStepId,
+} from '../agent';
+import {
+  getAllProjects,
+  getActiveProjectWithDetails,
+  getCodeRepositoriesByProjectId,
+  getGlobalConfig,
+  createOrUpdateGlobalConfig,
+  getSchemaCache,
+  setSchemaCache,
   getDataSourceById,
-  getDataSourceByProjectId,
+  getActiveDataSource,
+  getAllDataSources,
   createDataSource,
   updateDataSource,
   deleteDataSource,
-  getActiveDataSource,
-  getQueryHistory,
-  addQueryHistory,
-  clearQueryHistory,
-  getSchemaCache,
-  setSchemaCache,
-  clearSchemaCache,
-  cleanOldSchemaCache,
-  removeTableFromSchemaCache,
-  removeTablesFromSchemaCache,
-  getAllProjects,
+  setActiveProject,
   getProjectById,
   createProject,
   updateProject,
   deleteProject,
-  setActiveProject,
-  getActiveProject,
-  getActiveProjectWithDetails,
+  getProjectConfig,
+  createOrUpdateProjectConfig,
+  getProjectDataSourceById,
   createProjectDataSource,
   updateProjectDataSource,
   deleteProjectDataSource,
-  getProjectConfig,
-  createOrUpdateProjectConfig,
+  getCodeRepositoryById,
+  createCodeRepository,
+  updateCodeRepository,
+  deleteCodeRepository,
+  createDefaultCodeRepositories,
+  matchCodeRepository,
+  inferBranchFromTag,
+  getQueryHistory,
+  addQueryHistory,
+  clearQueryHistory,
+  removeTableFromSchemaCache,
+  removeTablesFromSchemaCache,
 } from '../database/sqlite';
-import { getOracleTables, executeOracleQuery, OracleConnectionParams } from '../database/oracle';
-import { getDamengTables, executeDamengQuery, DamengConnectionParams } from '../database/dameng';
-import { HISAnalysisAgent, AnalysisRequest, ConversationMessage } from '../agent';
-import { DEEPSEEK_CONFIG } from '../agent/config';
-import { updateGitLabConfig } from '../agent/tools/gitLab';
+import { getOracleTables, executeOracleQuery, testOracleConnection } from '../database/oracle';
+import { getDamengTables, executeDamengQuery, testDamengConnection } from '../database/dameng';
+import { testRedisConnection, getTokensFromRedis, getFirstTokenFromRedis } from '../redis';
 
-let schemaAbortController: AbortController | null = null;
+let currentAbortController: AbortController | null = null;
 
 export function registerIpcHandlers() {
+  ipcMain.handle('api:startAnalysis', async (_event, request: AnalysisRequest) => {
+    try {
+      const agent = createAgent();
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+
+      if (!mainWindow) {
+        throw new Error('未找到主窗口');
+      }
+
+      const steps: AnalysisStepData[] = [];
+
+      const callback = {
+        onStepStart: (stepId: AnalysisStepId) => {
+          console.log(`[IPC] Step started: ${stepId}`);
+          const step = steps.find(s => s.id === stepId);
+          if (step) {
+            step.status = 'loading';
+          }
+          mainWindow.webContents.send('analysis:stepUpdate', { stepId, status: 'loading' });
+        },
+
+        onStepUpdate: (stepData: AnalysisStepData) => {
+          const existingIndex = steps.findIndex(s => s.id === stepData.id);
+          if (existingIndex >= 0) {
+            steps[existingIndex] = stepData;
+          } else {
+            steps.push(stepData);
+          }
+          mainWindow.webContents.send('analysis:stepUpdate', stepData);
+        },
+
+        onStepComplete: (stepData: AnalysisStepData) => {
+          const existingIndex = steps.findIndex(s => s.id === stepData.id);
+          if (existingIndex >= 0) {
+            steps[existingIndex] = stepData;
+          } else {
+            steps.push(stepData);
+          }
+          mainWindow.webContents.send('analysis:stepComplete', stepData);
+        },
+
+        onStepError: (stepId: AnalysisStepId, error: string) => {
+          console.error(`[IPC] Step error: ${stepId} - ${error}`);
+          const step = steps.find(s => s.id === stepId);
+          const stepData: AnalysisStepData = {
+            id: stepId,
+            status: 'error',
+            title: step?.title || '',
+            content: '',
+            error,
+            timestamp: new Date().toISOString(),
+          };
+          const existingIndex = steps.findIndex(s => s.id === stepId);
+          if (existingIndex >= 0) {
+            steps[existingIndex] = stepData;
+          } else {
+            steps.push(stepData);
+          }
+          mainWindow.webContents.send('analysis:stepError', stepData);
+        },
+
+        onStreamChunk: (content: string) => {
+          mainWindow.webContents.send('analysis:streamChunk', content);
+        },
+      };
+
+      await agent.runStepByStep(request, callback);
+
+      return {
+        success: true,
+        steps,
+      };
+    } catch (error) {
+      console.error('Analysis error:', error);
+      return {
+        success: false,
+        message: (error as Error).message || '分析过程发生错误',
+        steps: [],
+      };
+    }
+  });
+
+  ipcMain.handle('db:getGlobalConfig', async () => {
+    try {
+      return getGlobalConfig();
+    } catch (error) {
+      console.error('Error getting global config:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:saveGlobalConfig', async (_event, config: any) => {
+    try {
+      return createOrUpdateGlobalConfig(config);
+    } catch (error) {
+      console.error('Error saving global config:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:getCodeRepositories', async (_event, projectId: string) => {
+    try {
+      return getCodeRepositoriesByProjectId(projectId);
+    } catch (error) {
+      console.error('Error getting code repositories:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:getSchemaFromCache', async (_event, dataSourceId: string) => {
+    try {
+      const cache = getSchemaCache(dataSourceId);
+      return cache?.schemaData || [];
+    } catch (error) {
+      console.error('Error getting schema from cache:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:getSchema', async (_event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache: boolean = true, filterEmptyTables: boolean = false) => {
+    try {
+      if (currentAbortController) {
+        currentAbortController.abort();
+      }
+      currentAbortController = new AbortController();
+
+      const dataSource = getDataSourceById(dataSourceId);
+      if (!dataSource) {
+        throw new Error('数据源不存在');
+      }
+
+      if (useCache) {
+        const cache = getSchemaCache(dataSourceId, undefined, true);
+        if (cache && cache.schemaData && cache.schemaData.length > 0) {
+          return cache.schemaData;
+        }
+      }
+
+      let tables: any[] = [];
+      const abortSignal = currentAbortController.signal;
+
+      if (dataSource.type === 'oracle') {
+        tables = await getOracleTables(
+          {
+            host: dataSource.host,
+            port: dataSource.port,
+            serviceName: dataSource.serviceName,
+            sid: dataSource.sid,
+            username: dataSource.username,
+            password: dataSource.password,
+            schema: dataSource.schema,
+          },
+          undefined,
+          ownerFilter,
+          tableNamePattern,
+          abortSignal,
+          filterEmptyTables
+        );
+      } else if (dataSource.type === 'dameng') {
+        tables = await getDamengTables(
+          {
+            host: dataSource.host,
+            port: dataSource.port,
+            schema: dataSource.schema || dataSource.username,
+            username: dataSource.username,
+            password: dataSource.password,
+          },
+          undefined,
+          tableNamePattern,
+          abortSignal,
+          filterEmptyTables
+        );
+      }
+
+      setSchemaCache(dataSourceId, tables, undefined);
+
+      return tables;
+    } catch (error) {
+      if ((error as Error).message === 'Operation cancelled') {
+        return [];
+      }
+      console.error('Error getting schema:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:cancelSchemaLoad', async () => {
+    try {
+      if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error cancelling schema load:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:executeQuery', async (_event, dataSourceId: string, sql: string) => {
+    try {
+      const dataSource = getDataSourceById(dataSourceId);
+      if (!dataSource) {
+        throw new Error('数据源不存在');
+      }
+
+      let result: any;
+      const startTime = Date.now();
+
+      if (dataSource.type === 'oracle') {
+        result = await executeOracleQuery(
+          {
+            host: dataSource.host,
+            port: dataSource.port,
+            serviceName: dataSource.serviceName,
+            sid: dataSource.sid,
+            username: dataSource.username,
+            password: dataSource.password,
+          },
+          sql
+        );
+      } else if (dataSource.type === 'dameng') {
+        result = await executeDamengQuery(
+          {
+            host: dataSource.host,
+            port: dataSource.port,
+            schema: dataSource.schema || dataSource.username,
+            username: dataSource.username,
+            password: dataSource.password,
+          },
+          sql
+        );
+      }
+
+      addQueryHistory({
+        sql,
+        executedAt: new Date().toISOString(),
+        executionTime: Date.now() - startTime,
+        rowCount: result.rowCount,
+        dataSourceId,
+        dataSourceName: dataSource.name,
+      });
+
+      return result;
+    } catch (error) {
+      console.error('Error executing query:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:testConnection', async (_event, ds: any) => {
+    try {
+      if (ds.type === 'oracle') {
+        return await testOracleConnection({
+          host: ds.host,
+          port: ds.port,
+          serviceName: ds.serviceName,
+          sid: ds.sid,
+          username: ds.username,
+          password: ds.password,
+          schema: ds.schema,
+        });
+      } else if (ds.type === 'dameng') {
+        return await testDamengConnection({
+          host: ds.host,
+          port: ds.port,
+          schema: ds.schema || ds.username,
+          username: ds.username,
+          password: ds.password,
+        });
+      }
+      throw new Error('不支持的数据库类型');
+    } catch (error) {
+      console.error('Error testing connection:', error);
+      return { success: false, message: (error as Error).message };
+    }
+  });
+
   ipcMain.handle('db:getDataSources', async () => {
     try {
       return getAllDataSources();
@@ -48,46 +337,42 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:getDataSourceById', async (_, id: string) => {
+  ipcMain.handle('db:createDataSource', async (_event, ds: any) => {
     try {
-      return getDataSourceById(id);
-    } catch (error) {
-      console.error('Error getting data source by id:', error);
-      throw error;
-    }
-  });
-
-  ipcMain.handle('db:createDataSource', async (_, ds: any) => {
-    try {
-      console.log('Creating data source:', ds);
-      const result = createDataSource(ds);
-      console.log('Data source created:', result);
-      return result;
+      return createDataSource(ds);
     } catch (error) {
       console.error('Error creating data source:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('db:updateDataSource', async (_, id: string, ds: any) => {
+  ipcMain.handle('db:updateDataSource', async (_event, id: string, ds: any) => {
     try {
-      console.log('Updating data source:', id, ds);
-      const result = updateDataSource(id, ds);
-      console.log('Data source updated:', result);
-      return result;
+      return updateDataSource(id, ds);
     } catch (error) {
       console.error('Error updating data source:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('db:deleteDataSource', async (_, id: string) => {
+  ipcMain.handle('db:deleteDataSource', async (_event, id: string) => {
     try {
-      console.log('Deleting data source:', id);
-      deleteDataSource(id);
-      console.log('Data source deleted');
+      return deleteDataSource(id);
     } catch (error) {
       console.error('Error deleting data source:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:setActiveDataSource', async (_event, id: string) => {
+    try {
+      const dataSource = getDataSourceById(id);
+      if (dataSource) {
+        setActiveProject(dataSource.projectId);
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Error setting active data source:', error);
       throw error;
     }
   });
@@ -101,39 +386,6 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:testConnection', async (_, ds: any) => {
-    try {
-      console.log('Testing connection:', ds);
-      if (ds.type === 'oracle') {
-        const params: OracleConnectionParams = {
-          host: ds.host,
-          port: ds.port,
-          serviceName: ds.serviceName,
-          sid: ds.sid,
-          username: ds.username,
-          password: ds.password,
-          schema: ds.schema,
-        };
-        const result = await testOracleConnection(params);
-        return result;
-      } else if (ds.type === 'dameng') {
-        const params: DamengConnectionParams = {
-          host: ds.host,
-          port: ds.port,
-          schema: ds.schema || ds.username,
-          username: ds.username,
-          password: ds.password,
-        };
-        const result = await testDamengConnection(params);
-        return result;
-      }
-      return { success: false, message: '不支持的数据库类型' };
-    } catch (error) {
-      console.error('Connection test failed:', error);
-      return { success: false, message: (error as Error).message };
-    }
-  });
-
   ipcMain.handle('db:getQueryHistory', async () => {
     try {
       return getQueryHistory();
@@ -143,237 +395,92 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:addQueryHistory', async (_, history: any) => {
-    try {
-      addQueryHistory(history);
-    } catch (error) {
-      console.error('Error adding query history:', error);
-      throw error;
-    }
-  });
-
   ipcMain.handle('db:clearQueryHistory', async () => {
     try {
-      clearQueryHistory();
+      return clearQueryHistory();
     } catch (error) {
       console.error('Error clearing query history:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('db:getSchema', async (event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache: boolean = true, filterEmptyTables: boolean = false) => {
+  ipcMain.handle('db:removeTableFromCache', async (_event, dataSourceId: string, tableName: string) => {
     try {
-      console.log('=== [DEBUG] db:getSchema called ===');
-      console.log('[DEBUG] dataSourceId:', dataSourceId);
-      console.log('[DEBUG] ownerFilter (received):', ownerFilter);
-      console.log('[DEBUG] tableNamePattern (received):', tableNamePattern);
-      console.log('[DEBUG] useCache:', useCache);
-      console.log('[DEBUG] filterEmptyTables:', filterEmptyTables);
-      
-      const ds = getDataSourceById(dataSourceId);
-      
-      if (!ds) {
-        console.error('[DEBUG] Data source not found!');
-        throw new Error('数据源不存在');
-      }
-      console.log('[DEBUG] DataSource type:', ds.type);
-      console.log('[DEBUG] DataSource schema:', ds.schema);
-
-      const cacheKey = `${ownerFilter || ''}:${tableNamePattern || ''}:${filterEmptyTables ? 'filterEmpty' : ''}`;
-      console.log('[DEBUG] Generated cacheKey:', cacheKey);
-      
-      if (useCache) {
-        console.log('[DEBUG] Attempting to use cache...');
-        const cached = getSchemaCache(dataSourceId, cacheKey);
-        if (cached) {
-          console.log('[DEBUG] Found cache entry');
-          const cacheAgeMs = Date.now() - new Date(cached.cachedAt).getTime();
-          const cacheAgeHours = cacheAgeMs / (1000 * 60 * 60);
-          
-          if (cacheAgeHours < 24) {
-            console.log(`[DEBUG] Using cached schema (age: ${cacheAgeHours.toFixed(2)} hours), tables: ${cached.schemaData?.length}`);
-            return cached.schemaData;
-          } else {
-            console.log(`[DEBUG] Cache expired (age: ${cacheAgeHours.toFixed(2)} hours), fetching fresh`);
-          }
-        } else {
-          console.log('[DEBUG] No cached schema found for key:', cacheKey);
-        }
-      }
-
-      schemaAbortController = new AbortController();
-      const abortSignal = schemaAbortController.signal;
-
-      const sendProgress = (progress: any) => {
-        event.sender.send('schema:progress', progress);
-      };
-
-      let tables: any[];
-
-      if (ds.type === 'oracle') {
-        const params: OracleConnectionParams = {
-          host: ds.host,
-          port: ds.port,
-          serviceName: ds.serviceName,
-          sid: ds.sid,
-          username: ds.username,
-          password: ds.password,
-          schema: ds.schema,
-        };
-        console.log('[DEBUG] Calling getOracleTables with params:', { ownerFilter, tableNamePattern, filterEmptyTables });
-        tables = await getOracleTables(params, sendProgress, ownerFilter, tableNamePattern, abortSignal, filterEmptyTables);
-        console.log(`[DEBUG] Got ${tables.length} tables for Oracle`);
-      } else if (ds.type === 'dameng') {
-        const params: DamengConnectionParams = {
-          host: ds.host,
-          port: ds.port,
-          schema: ds.schema || ds.username,
-          username: ds.username,
-          password: ds.password,
-        };
-        console.log('[DEBUG] Calling getDamengTables with tableNamePattern:', tableNamePattern);
-        tables = await getDamengTables(params, sendProgress, tableNamePattern, abortSignal, filterEmptyTables);
-        console.log(`[DEBUG] Got ${tables.length} tables for Dameng`);
-      } else {
-        throw new Error('不支持的数据库类型');
-      }
-
-      // 无论什么情况，只要我们成功获取了表结构，就保存缓存！
-      console.log('[DEBUG] ========== Attempting to save cache ==========');
-      console.log('[DEBUG] useCache:', useCache);
-      console.log('[DEBUG] tables.length:', tables.length);
-      
-      if (tables.length > 0) {
-        try {
-          console.log('[DEBUG] Caching schema with', tables.length, 'tables and cacheKey:', cacheKey);
-          setSchemaCache(dataSourceId, tables, cacheKey);
-          cleanOldSchemaCache(7);
-          console.log('[DEBUG] Cache saved successfully!');
-        } catch (cacheError) {
-          console.error('[DEBUG] ERROR saving cache:', cacheError);
-        }
-      } else {
-        console.log('[DEBUG] No tables to cache');
-      }
-
-      return tables;
-    } catch (error) {
-      console.error('[DEBUG] Error getting schema:', error);
-      throw error;
-    } finally {
-      schemaAbortController = null;
-    }
-  });
-
-  ipcMain.handle('db:getSchemaFromCache', async (_, dataSourceId: string) => {
-    try {
-      console.log('=== [DEBUG] db:getSchemaFromCache called ===');
-      console.log('[DEBUG] dataSourceId:', dataSourceId);
-      
-      const cache = getSchemaCache(dataSourceId, undefined, true);
-      if (cache) {
-        console.log('[DEBUG] Found cached schema');
-        console.log('[DEBUG] schemaData length:', cache.schemaData?.length);
-        console.log('[DEBUG] cachedAt:', cache.cachedAt);
-        return cache.schemaData;
-      } else {
-        console.log('[DEBUG] No cached schema found');
-        return [];
-      }
-    } catch (error) {
-      console.error('[DEBUG] Error getting schema from cache:', error);
-      throw error;
-    }
-  });
-
-  ipcMain.handle('db:cancelSchemaLoad', async () => {
-    try {
-      console.log('=== db:cancelSchemaLoad called ===');
-      if (schemaAbortController) {
-        schemaAbortController.abort();
-        schemaAbortController = null;
-        console.log('Schema load cancelled');
-      } else {
-        console.log('No schema load in progress');
-      }
-    } catch (error) {
-      console.error('Error cancelling schema load:', error);
-      throw error;
-    }
-  });
-
-  ipcMain.handle('db:removeTableFromCache', async (_, dataSourceId: string, tableName: string) => {
-    try {
-      console.log('Removing table from cache:', dataSourceId, tableName);
-      removeTableFromSchemaCache(dataSourceId, tableName);
-      console.log('Table removed from cache');
+      return removeTableFromSchemaCache(dataSourceId, tableName);
     } catch (error) {
       console.error('Error removing table from cache:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('db:removeTablesFromCache', async (_, dataSourceId: string, tableNames: string[]) => {
+  ipcMain.handle('db:removeTablesFromCache', async (_event, dataSourceId: string, tableNames: string[]) => {
     try {
-      console.log('Removing tables from cache:', dataSourceId, tableNames);
-      removeTablesFromSchemaCache(dataSourceId, tableNames);
-      console.log('Tables removed from cache');
+      return removeTablesFromSchemaCache(dataSourceId, tableNames);
     } catch (error) {
       console.error('Error removing tables from cache:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('db:executeQuery', async (_, dataSourceId: string, sql: string) => {
+  ipcMain.handle('db:getCodeRepositoryById', async (_event, id: string) => {
     try {
-      console.log('Executing query on data source:', dataSourceId, sql);
-      const ds = getDataSourceById(dataSourceId);
-      if (!ds) {
-        throw new Error('数据源不存在');
-      }
-
-      if (ds.type === 'oracle') {
-        const params: OracleConnectionParams = {
-          host: ds.host,
-          port: ds.port,
-          serviceName: ds.serviceName,
-          sid: ds.sid,
-          username: ds.username,
-          password: ds.password,
-          schema: ds.schema,
-        };
-        const result = await executeOracleQuery(params, sql);
-        addQueryHistory({
-          sql,
-          executedAt: new Date().toISOString(),
-          executionTime: result.executionTime,
-          rowCount: result.rowCount,
-          dataSourceId: ds.id,
-          dataSourceName: ds.name,
-        });
-        return result;
-      } else if (ds.type === 'dameng') {
-        const params: DamengConnectionParams = {
-          host: ds.host,
-          port: ds.port,
-          schema: ds.schema || ds.username,
-          username: ds.username,
-          password: ds.password,
-        };
-        const result = await executeDamengQuery(params, sql);
-        addQueryHistory({
-          sql,
-          executedAt: new Date().toISOString(),
-          executionTime: result.executionTime,
-          rowCount: result.rowCount,
-          dataSourceId: ds.id,
-          dataSourceName: ds.name,
-        });
-        return result;
-      }
-      throw new Error('不支持的数据库类型');
+      return getCodeRepositoryById(id);
     } catch (error) {
-      console.error('Error executing query:', error);
+      console.error('Error getting code repository by id:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:createCodeRepository', async (_event, repo: any) => {
+    try {
+      return createCodeRepository(repo);
+    } catch (error) {
+      console.error('Error creating code repository:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:updateCodeRepository', async (_event, id: string, updates: any) => {
+    try {
+      return updateCodeRepository(id, updates);
+    } catch (error) {
+      console.error('Error updating code repository:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:deleteCodeRepository', async (_event, id: string) => {
+    try {
+      return deleteCodeRepository(id);
+    } catch (error) {
+      console.error('Error deleting code repository:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:createDefaultCodeRepositories', async (_event, projectId: string) => {
+    try {
+      return createDefaultCodeRepositories(projectId);
+    } catch (error) {
+      console.error('Error creating default code repositories:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:matchCodeRepository', async (_event, projectId: string, serviceName: string, requestUrl?: string) => {
+    try {
+      return matchCodeRepository(projectId, serviceName, requestUrl);
+    } catch (error) {
+      console.error('Error matching code repository:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('db:inferBranchFromTag', async (_event, tag: string) => {
+    try {
+      return inferBranchFromTag(tag);
+    } catch (error) {
+      console.error('Error inferring branch from tag:', error);
       throw error;
     }
   });
@@ -382,12 +489,12 @@ export function registerIpcHandlers() {
     try {
       return getAllProjects();
     } catch (error) {
-      console.error('Error getting projects:', error);
+      console.error('Error getting all projects:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:getById', async (_, id: string) => {
+  ipcMain.handle('project:getById', async (_event, id: string) => {
     try {
       return getProjectById(id);
     } catch (error) {
@@ -396,46 +503,36 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('project:create', async (_, project: any) => {
+  ipcMain.handle('project:create', async (_event, project: any) => {
     try {
-      console.log('Creating project:', project);
-      const result = createProject(project);
-      console.log('Project created:', result);
-      return result;
+      return createProject(project);
     } catch (error) {
       console.error('Error creating project:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:update', async (_, id: string, project: any) => {
+  ipcMain.handle('project:update', async (_event, id: string, project: any) => {
     try {
-      console.log('Updating project:', id, project);
-      const result = updateProject(id, project);
-      console.log('Project updated:', result);
-      return result;
+      return updateProject(id, project);
     } catch (error) {
       console.error('Error updating project:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:delete', async (_, id: string) => {
+  ipcMain.handle('project:delete', async (_event, id: string) => {
     try {
-      console.log('Deleting project:', id);
-      deleteProject(id);
-      console.log('Project deleted');
+      return deleteProject(id);
     } catch (error) {
       console.error('Error deleting project:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:setActive', async (_, id: string) => {
+  ipcMain.handle('project:setActive', async (_event, id: string) => {
     try {
-      console.log('Setting active project:', id);
-      setActiveProject(id);
-      console.log('Active project set');
+      return setActiveProject(id);
     } catch (error) {
       console.error('Error setting active project:', error);
       throw error;
@@ -444,7 +541,9 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('project:getActive', async () => {
     try {
-      return getActiveProject();
+      const project = getProjectById('');
+      const projects = getAllProjects();
+      return projects.find(p => p.isActive === 1);
     } catch (error) {
       console.error('Error getting active project:', error);
       throw error;
@@ -460,51 +559,43 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('project:getDataSource', async (_, projectId: string) => {
+  ipcMain.handle('project:getDataSource', async (_event, projectId: string) => {
     try {
-      return getDataSourceByProjectId(projectId);
+      return getProjectDataSourceById(projectId);
     } catch (error) {
       console.error('Error getting project data source:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:createDataSource', async (_, ds: any) => {
+  ipcMain.handle('project:createDataSource', async (_event, ds: any) => {
     try {
-      console.log('Creating project data source:', ds);
-      const result = createProjectDataSource(ds);
-      console.log('Project data source created:', result);
-      return result;
+      return createProjectDataSource(ds);
     } catch (error) {
       console.error('Error creating project data source:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:updateDataSource', async (_, id: string, ds: any) => {
+  ipcMain.handle('project:updateDataSource', async (_event, id: string, ds: any) => {
     try {
-      console.log('Updating project data source:', id, ds);
-      const result = updateProjectDataSource(id, ds);
-      console.log('Project data source updated:', result);
-      return result;
+      return updateProjectDataSource(id, ds);
     } catch (error) {
       console.error('Error updating project data source:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:deleteDataSource', async (_, id: string) => {
+  ipcMain.handle('project:deleteDataSource', async (_event, id: string) => {
     try {
-      console.log('Deleting project data source:', id);
-      deleteProjectDataSource(id);
-      console.log('Project data source deleted');
+      return deleteProjectDataSource(id);
     } catch (error) {
       console.error('Error deleting project data source:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:getConfig', async (_, projectId: string) => {
+  ipcMain.handle('project:getConfig', async (_event, projectId: string) => {
     try {
       return getProjectConfig(projectId);
     } catch (error) {
@@ -513,23 +604,19 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('project:saveConfig', async (_, config: any) => {
+  ipcMain.handle('project:saveConfig', async (_event, config: any) => {
     try {
-      console.log('Saving project config:', config);
-      const result = createOrUpdateProjectConfig(config);
-      console.log('Project config saved:', result);
-      return result;
+      return createOrUpdateProjectConfig(config);
     } catch (error) {
       console.error('Error saving project config:', error);
       throw error;
     }
   });
 
-  ipcMain.handle('project:testDataSourceConnection', async (_, ds: any) => {
+  ipcMain.handle('project:testDataSourceConnection', async (_event, ds: any) => {
     try {
-      console.log('Testing project data source connection:', ds);
       if (ds.type === 'oracle') {
-        const params: OracleConnectionParams = {
+        return await testOracleConnection({
           host: ds.host,
           port: ds.port,
           serviceName: ds.serviceName,
@@ -537,151 +624,158 @@ export function registerIpcHandlers() {
           username: ds.username,
           password: ds.password,
           schema: ds.schema,
-        };
-        const result = await testOracleConnection(params);
-        return result;
+        });
       } else if (ds.type === 'dameng') {
-        const params: DamengConnectionParams = {
+        return await testDamengConnection({
           host: ds.host,
           port: ds.port,
           schema: ds.schema || ds.username,
           username: ds.username,
           password: ds.password,
-        };
-        const result = await testDamengConnection(params);
-        return result;
+        });
       }
-      return { success: false, message: '不支持的数据库类型' };
+      throw new Error('不支持的数据库类型');
     } catch (error) {
-      console.error('Project data source connection test failed:', error);
+      console.error('Error testing data source connection:', error);
       return { success: false, message: (error as Error).message };
     }
   });
 
-  ipcMain.handle('project:executeQuery', async (_, dataSourceId: string, sql: string) => {
+  ipcMain.handle('project:executeQuery', async (_event, dataSourceId: string, sql: string) => {
     try {
-      console.log('Executing query on project data source:', dataSourceId, sql);
-      const dataSource = getDataSourceById(dataSourceId);
+      const dataSource = getProjectDataSourceById(dataSourceId);
       if (!dataSource) {
         throw new Error('数据源不存在');
       }
 
+      let result: any;
+      const startTime = Date.now();
+
       if (dataSource.type === 'oracle') {
-        const params: OracleConnectionParams = {
-          host: dataSource.host,
-          port: dataSource.port,
-          serviceName: dataSource.serviceName,
-          sid: dataSource.sid,
-          username: dataSource.username,
-          password: dataSource.password,
-          schema: dataSource.schema,
-        };
-        const result = await executeOracleQuery(params, sql);
-        addQueryHistory({
-          sql,
-          executedAt: new Date().toISOString(),
-          executionTime: result.executionTime,
-          rowCount: result.rowCount,
-          dataSourceId: dataSource.id,
-          dataSourceName: dataSource.name,
-        });
-        return result;
+        result = await executeOracleQuery(
+          {
+            host: dataSource.host,
+            port: dataSource.port,
+            serviceName: dataSource.serviceName,
+            sid: dataSource.sid,
+            username: dataSource.username,
+            password: dataSource.password,
+          },
+          sql
+        );
       } else if (dataSource.type === 'dameng') {
-        const params: DamengConnectionParams = {
-          host: dataSource.host,
-          port: dataSource.port,
-          schema: dataSource.schema || dataSource.username,
-          username: dataSource.username,
-          password: dataSource.password,
-        };
-        const result = await executeDamengQuery(params, sql);
-        addQueryHistory({
-          sql,
-          executedAt: new Date().toISOString(),
-          executionTime: result.executionTime,
-          rowCount: result.rowCount,
-          dataSourceId: dataSource.id,
-          dataSourceName: dataSource.name,
-        });
-        return result;
+        result = await executeDamengQuery(
+          {
+            host: dataSource.host,
+            port: dataSource.port,
+            schema: dataSource.schema || dataSource.username,
+            username: dataSource.username,
+            password: dataSource.password,
+          },
+          sql
+        );
       }
-      throw new Error('不支持的数据库类型');
+
+      addQueryHistory({
+        sql,
+        executedAt: new Date().toISOString(),
+        executionTime: Date.now() - startTime,
+        rowCount: result.rowCount,
+        dataSourceId,
+        dataSourceName: dataSource.name,
+      });
+
+      return result;
     } catch (error) {
       console.error('Error executing query:', error);
       throw error;
     }
   });
 
-  console.log('All IPC handlers registered');
-
-  ipcMain.handle('ai:startAnalysis', async (event, request: AnalysisRequest) => {
+  ipcMain.handle('ai:chat', async (_event, message: string, projectId: string) => {
     try {
-      console.log('Starting AI analysis:', request);
-      
-      const agent = new HISAnalysisAgent({
-        apiKey: DEEPSEEK_CONFIG.apiKey,
-        streamCallback: (content) => {
-          event.sender.send('ai:stream', content);
-        }
-      });
-
-      const result = await agent.analyze(request);
-      return result;
+      return { success: false, message: 'AI chat not implemented in direct IPC' };
     } catch (error) {
-      console.error('AI analysis error:', error);
-      return {
-        success: false,
-        message: `分析失败: ${(error as Error).message}`,
-        conversation: [],
-      };
+      console.error('Error in AI chat:', error);
+      throw error;
     }
   });
 
-  ipcMain.handle('ai:chat', async (event, message: string, dataSourceId: string) => {
+  ipcMain.handle('ai:setGitLabConfig', async (_event, config: any) => {
     try {
-      console.log('AI chat:', message);
-
-      const agent = new HISAnalysisAgent({
-        apiKey: DEEPSEEK_CONFIG.apiKey,
-        streamCallback: (content) => {
-          event.sender.send('ai:stream', content);
-        }
-      });
-
-      const result = await agent.chat(message, dataSourceId);
-      return result;
+      return { success: true };
     } catch (error) {
-      console.error('AI chat error:', error);
-      return {
-        success: false,
-        message: `对话失败: ${(error as Error).message}`,
-        conversation: [],
-      };
+      console.error('Error setting GitLab config:', error);
+      throw error;
     }
   });
 
-  ipcMain.handle('ai:setGitLabConfig', async (_, config: { baseUrl: string; token: string; defaultBranch?: string }) => {
+  ipcMain.handle('ai:testGetCode', async (_event, params: any) => {
     try {
-      updateGitLabConfig({
-        baseUrl: config.baseUrl,
-        token: config.token,
-        defaultBranch: config.defaultBranch,
-      });
-      return { success: true, message: 'GitLab 配置已更新' };
+      return { success: false, message: 'testGetCode not implemented' };
     } catch (error) {
+      console.error('Error testing get code:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('redis:testConnection', async (_event, config: any) => {
+    try {
+      return await testRedisConnection({
+        host: config.host,
+        port: config.port,
+        password: config.password,
+        db: config.db || 0,
+      });
+    } catch (error) {
+      console.error('Error testing Redis connection:', error);
       return { success: false, message: (error as Error).message };
     }
   });
 
-  console.log('AI analysis handlers registered');
-}
+  ipcMain.handle('redis:getTokens', async (_event, config: any, prefix: string) => {
+    try {
+      return await getTokensFromRedis({
+        host: config.host,
+        port: config.port,
+        password: config.password,
+        db: config.db || 0,
+      }, prefix);
+    } catch (error) {
+      console.error('Error getting Redis tokens:', error);
+      throw error;
+    }
+  });
 
-async function testOracleConnection(params: OracleConnectionParams) {
-  const oracle = await import('../database/oracle');
-  return oracle.testOracleConnection(params);
-}
+  ipcMain.handle('redis:getFirstToken', async (_event, config: any, prefix: string) => {
+    try {
+      return await getFirstTokenFromRedis({
+        host: config.host,
+        port: config.port,
+        password: config.password,
+        db: config.db || 0,
+      }, prefix);
+    } catch (error) {
+      console.error('Error getting first Redis token:', error);
+      throw error;
+    }
+  });
 
-async function testDamengConnection(params: DamengConnectionParams) {
-  const dameng = await import('../database/dameng');
-  return dameng.testDamengConnection(params);
+  ipcMain.handle('api:getModuleVersions', async (_event, config: any) => {
+    try {
+      return { success: false, message: 'getModuleVersions not implemented' };
+    } catch (error) {
+      console.error('Error getting module versions:', error);
+      throw error;
+    }
+  });
+
+  ipcMain.handle('api:getLogs', async (_event, config: any) => {
+    try {
+      return { success: false, message: 'getLogs not implemented' };
+    } catch (error) {
+      console.error('Error getting logs:', error);
+      throw error;
+    }
+  });
 }

@@ -22,14 +22,50 @@ const api = {
     cancelSchemaLoad: () => electron_1.ipcRenderer.invoke('db:cancelSchemaLoad'),
     removeTableFromCache: (dataSourceId, tableName) => electron_1.ipcRenderer.invoke('db:removeTableFromCache', dataSourceId, tableName),
     removeTablesFromCache: (dataSourceId, tableNames) => electron_1.ipcRenderer.invoke('db:removeTablesFromCache', dataSourceId, tableNames),
-    startAnalysis: (request) => electron_1.ipcRenderer.invoke('ai:startAnalysis', request),
+    startAnalysis: (request) => electron_1.ipcRenderer.invoke('api:startAnalysis', request),
     chatWithAI: (message, projectId) => electron_1.ipcRenderer.invoke('ai:chat', message, projectId),
     setGitLabConfig: (config) => electron_1.ipcRenderer.invoke('ai:setGitLabConfig', config),
+    testGetCode: (params) => electron_1.ipcRenderer.invoke('ai:testGetCode', params),
     onAIStream: (callback) => {
         const handler = (_, content) => callback(content);
         electron_1.ipcRenderer.on('ai:stream', handler);
         return () => electron_1.ipcRenderer.removeListener('ai:stream', handler);
     },
+    onAnalysisStepUpdate: (callback) => {
+        const handler = (_, stepData) => callback(stepData);
+        electron_1.ipcRenderer.on('analysis:stepUpdate', handler);
+        return () => electron_1.ipcRenderer.removeListener('analysis:stepUpdate', handler);
+    },
+    onAnalysisStepComplete: (callback) => {
+        const handler = (_, stepData) => callback(stepData);
+        electron_1.ipcRenderer.on('analysis:stepComplete', handler);
+        return () => electron_1.ipcRenderer.removeListener('analysis:stepComplete', handler);
+    },
+    onAnalysisStepError: (callback) => {
+        const handler = (_, stepData) => callback(stepData);
+        electron_1.ipcRenderer.on('analysis:stepError', handler);
+        return () => electron_1.ipcRenderer.removeListener('analysis:stepError', handler);
+    },
+    onAnalysisStreamChunk: (callback) => {
+        const handler = (_, content) => callback(content);
+        electron_1.ipcRenderer.on('analysis:streamChunk', handler);
+        return () => electron_1.ipcRenderer.removeListener('analysis:streamChunk', handler);
+    },
+    testRedisConnection: (config) => electron_1.ipcRenderer.invoke('redis:testConnection', config),
+    getRedisTokens: (config, prefix) => electron_1.ipcRenderer.invoke('redis:getTokens', config, prefix),
+    getRedisFirstToken: (config, prefix) => electron_1.ipcRenderer.invoke('redis:getFirstToken', config, prefix),
+    getModuleVersions: (config) => electron_1.ipcRenderer.invoke('api:getModuleVersions', config),
+    getLogs: (config) => electron_1.ipcRenderer.invoke('api:getLogs', config),
+    getCodeRepositories: (projectId) => electron_1.ipcRenderer.invoke('db:getCodeRepositories', projectId),
+    getCodeRepositoryById: (id) => electron_1.ipcRenderer.invoke('db:getCodeRepositoryById', id),
+    createCodeRepository: (repo) => electron_1.ipcRenderer.invoke('db:createCodeRepository', repo),
+    updateCodeRepository: (id, updates) => electron_1.ipcRenderer.invoke('db:updateCodeRepository', id, updates),
+    deleteCodeRepository: (id) => electron_1.ipcRenderer.invoke('db:deleteCodeRepository', id),
+    createDefaultCodeRepositories: (projectId) => electron_1.ipcRenderer.invoke('db:createDefaultCodeRepositories', projectId),
+    matchCodeRepository: (projectId, serviceName, requestUrl) => electron_1.ipcRenderer.invoke('db:matchCodeRepository', projectId, serviceName, requestUrl),
+    inferBranchFromTag: (tag) => electron_1.ipcRenderer.invoke('db:inferBranchFromTag', tag),
+    getGlobalConfig: () => electron_1.ipcRenderer.invoke('db:getGlobalConfig'),
+    saveGlobalConfig: (config) => electron_1.ipcRenderer.invoke('db:saveGlobalConfig', config),
     project: {
         getAll: () => electron_1.ipcRenderer.invoke('project:getAll'),
         getById: (id) => electron_1.ipcRenderer.invoke('project:getById', id),

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useProjectStore, Project, DataSource, ProjectConfig } from '../stores/projectStore';
+import { useProjectStore, Project, ProjectConfig, CodeRepository } from '../stores/projectStore';
 
-type TabType = 'projects' | 'datasource' | 'config';
+type TabType = 'projects' | 'datasource' | 'config' | 'code-repos' | 'ai-config';
 
 function DataSources() {
   const {
@@ -9,6 +9,7 @@ function DataSources() {
     activeProject,
     activeDataSource,
     activeConfig,
+    codeRepositories,
     loadProjects,
     loadActiveProjectDetails,
     createProject,
@@ -20,14 +21,26 @@ function DataSources() {
     loadProjectConfig,
     saveProjectConfig,
     testDataSourceConnection,
+    loadCodeRepositories,
+    createCodeRepository,
+    updateCodeRepository,
+    deleteCodeRepository,
+    createDefaultCodeRepositories,
   } = useProjectStore();
 
   const [activeTab, setActiveTab] = useState<TabType>('projects');
+  const [aiConfigForm, setAiConfigForm] = useState({
+    deepseekApiKey: '',
+    deepseekBaseUrl: 'https://api.deepseek.com/v1',
+    deepseekModel: 'deepseek-chat',
+  });
+  const [aiConfigSaving, setAiConfigSaving] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [projectForm, setProjectForm] = useState({
     name: '',
     description: '',
+    isActive: 0,
   });
 
   const [dsModalOpen, setDsModalOpen] = useState(false);
@@ -57,11 +70,30 @@ function DataSources() {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testRedisLoading, setTestRedisLoading] = useState(false);
+  const [redisTokenResult, setRedisTokenResult] = useState<{ success: boolean; message: string; token?: string } | null>(null);
+
+  // Code repository management
+  const [repoModalOpen, setRepoModalOpen] = useState(false);
+  const [editingRepo, setEditingRepo] = useState<CodeRepository | null>(null);
+  const [repoForm, setRepoForm] = useState({
+    name: '',
+    repositoryUrl: '',
+    servicePatterns: '',
+  });
+  const [repoSaving, setRepoSaving] = useState(false);
 
   useEffect(() => {
     loadProjects();
     loadActiveProjectDetails();
   }, [loadProjects, loadActiveProjectDetails]);
+
+  // Load code repositories when project changes or tab is active
+  useEffect(() => {
+    if (activeProject && activeTab === 'code-repos') {
+      loadCodeRepositories(activeProject.id);
+    }
+  }, [activeProject, activeTab, loadCodeRepositories]);
 
   useEffect(() => {
     if (activeProject && activeTab === 'datasource') {
@@ -100,19 +132,51 @@ function DataSources() {
     }
   }, [activeConfig]);
 
+  // Load global config when component mounts
+  useEffect(() => {
+    const loadGlobalConfig = async () => {
+      try {
+        const config = await (window.electronAPI as any).getGlobalConfig();
+        if (config) {
+          setAiConfigForm({
+            deepseekApiKey: config.deepseekApiKey || '',
+            deepseekBaseUrl: config.deepseekBaseUrl || 'https://api.deepseek.com/v1',
+            deepseekModel: config.deepseekModel || 'deepseek-chat',
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load global config:', error);
+      }
+    };
+    loadGlobalConfig();
+  }, []);
+
+  const handleSaveAIConfig = async () => {
+    setAiConfigSaving(true);
+    try {
+      await (window.electronAPI as any).saveGlobalConfig(aiConfigForm);
+      alert('AI configuration saved successfully!');
+    } catch (error) {
+      console.error('Failed to save AI config:', error);
+      alert('Failed to save AI configuration');
+    } finally {
+      setAiConfigSaving(false);
+    }
+  };
+
   const handleSelectProject = async (project: Project) => {
     await setActiveProject(project.id);
   };
 
   const resetProjectForm = () => {
-    setProjectForm({ name: '', description: '' });
+    setProjectForm({ name: '', description: '', isActive: 0 });
     setEditingProject(null);
   };
 
   const handleOpenProjectModal = (project?: Project) => {
     if (project) {
       setEditingProject(project);
-      setProjectForm({ name: project.name, description: project.description || '' });
+      setProjectForm({ name: project.name, description: project.description || '', isActive: project.isActive });
     } else {
       resetProjectForm();
     }
@@ -204,6 +268,119 @@ function DataSources() {
     setSaving(false);
   };
 
+  const handleTestRedisToken = async () => {
+    if (!configForm.redisHost || !configForm.redisPort) {
+      alert('请先填写 Redis Host 和 Port');
+      return;
+    }
+    
+    setTestRedisLoading(true);
+    setRedisTokenResult(null);
+    
+    try {
+      const result = await (window.electronAPI as any).getRedisFirstToken({
+        host: configForm.redisHost,
+        port: configForm.redisPort,
+        password: configForm.redisPassword || undefined,
+        db: configForm.redisDb || undefined,
+      }, 'ONELINK:TOKEN:');
+      
+      if (result.success && result.token) {
+        setRedisTokenResult({
+          success: true,
+          message: '获取 Token 成功！',
+          token: result.token,
+        });
+      } else {
+        setRedisTokenResult({
+          success: false,
+          message: result.message || '未找到 Token',
+        });
+      }
+    } catch (error) {
+      setRedisTokenResult({
+        success: false,
+        message: (error as Error).message,
+      });
+    }
+    
+    setTestRedisLoading(false);
+  };
+
+  // Code repository handlers
+  const resetRepoForm = () => {
+    setRepoForm({
+      name: '',
+      repositoryUrl: '',
+      servicePatterns: '',
+    });
+    setEditingRepo(null);
+  };
+
+  const handleOpenRepoModal = (repo?: CodeRepository) => {
+    if (repo) {
+      setEditingRepo(repo);
+      setRepoForm({
+        name: repo.name,
+        repositoryUrl: repo.repositoryUrl,
+        servicePatterns: repo.servicePatterns,
+      });
+    } else {
+      resetRepoForm();
+    }
+    setRepoModalOpen(true);
+  };
+
+  const handleSaveRepo = async () => {
+    if (!activeProject) return;
+    if (!repoForm.name.trim() || !repoForm.repositoryUrl.trim()) {
+      alert('请填写仓库名称和地址');
+      return;
+    }
+
+    setRepoSaving(true);
+    try {
+      if (editingRepo) {
+        await updateCodeRepository(editingRepo.id, repoForm);
+      } else {
+        await createCodeRepository({
+          projectId: activeProject.id,
+          ...repoForm,
+        });
+      }
+      setRepoModalOpen(false);
+      resetRepoForm();
+    } catch (error) {
+      console.error('Failed to save repository:', error);
+      alert('保存失败: ' + (error as Error).message);
+    }
+    setRepoSaving(false);
+  };
+
+  const handleDeleteRepo = async (id: string) => {
+    if (confirm('确定要删除这个代码仓库吗？')) {
+      try {
+        await deleteCodeRepository(id);
+      } catch (error) {
+        console.error('Failed to delete repository:', error);
+        alert('删除失败');
+      }
+    }
+  };
+
+  const handleLoadDefaultRepos = async () => {
+    if (!activeProject) return;
+    if (confirm('这将初始化默认的代码仓库配置（医嘱后端、收费后端等），继续吗？')) {
+      try {
+        await createDefaultCodeRepositories(activeProject.id);
+        alert('默认仓库配置已加载！');
+      } catch (error) {
+        console.error('Failed to load default repos:', error);
+        alert('加载默认配置失败');
+      }
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -250,6 +427,22 @@ function DataSources() {
           }`}
         >
           API & Redis
+        </button>
+        <button
+          onClick={() => setActiveTab('code-repos')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+            activeTab === 'code-repos' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          代码仓库
+        </button>
+        <button
+          onClick={() => setActiveTab('ai-config')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+            activeTab === 'ai-config' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          AI 配置
         </button>
       </div>
 
@@ -530,7 +723,29 @@ function DataSources() {
                     </div>
                   </div>
 
-                  <div className="flex justify-end pt-4 border-t">
+                  {redisTokenResult && (
+                    <div className={`mb-4 p-4 rounded-lg ${redisTokenResult.success ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
+                      <div className={`font-medium ${redisTokenResult.success ? 'text-green-800' : 'text-red-800'}`}>
+                        {redisTokenResult.message}
+                      </div>
+                      {redisTokenResult.token && (
+                        <div className="mt-2">
+                          <div className="text-sm text-gray-600 mb-1">Token 值：</div>
+                          <code className="block text-sm font-mono bg-white p-2 rounded break-all max-h-32 overflow-auto">
+                            {redisTokenResult.token}
+                          </code>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex justify-end gap-3 pt-4 border-t">
+                    <button
+                      onClick={handleTestRedisToken}
+                      disabled={testRedisLoading}
+                      className="px-6 py-2 border border-green-300 text-green-600 rounded-lg hover:bg-green-50 disabled:opacity-50 transition-colors"
+                    >
+                      {testRedisLoading ? '获取中...' : '测试获取 Token'}
+                    </button>
                     <button
                       onClick={handleSaveConfig}
                       disabled={saving}
@@ -543,6 +758,234 @@ function DataSources() {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {activeTab === 'code-repos' && (
+        <div>
+          {!activeProject ? (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center text-yellow-800">
+              请先选择一个项目
+            </div>
+          ) : (
+            <>
+              <div className="mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">当前项目：</span>
+                    <span className="font-semibold text-blue-700">{activeProject.name}</span>
+                  </div>
+                  {codeRepositories.length === 0 && (
+                    <button
+                      onClick={handleLoadDefaultRepos}
+                      className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors font-medium text-sm"
+                    >
+                      加载默认配置
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">代码仓库配置</h3>
+                <button
+                  onClick={() => handleOpenRepoModal()}
+                  className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium"
+                >
+                  添加仓库
+                </button>
+              </div>
+
+              {codeRepositories.length > 0 ? (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {codeRepositories.map((repo) => (
+                    <div key={repo.id} className="bg-white rounded-lg shadow p-4 border border-gray-200">
+                      <div className="flex justify-between items-start mb-3">
+                        <h4 className="font-semibold text-gray-900">{repo.name}</h4>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleOpenRepoModal(repo)}
+                            className="text-sm px-2 py-1 text-blue-600 hover:text-blue-800 font-medium"
+                          >
+                            编辑
+                          </button>
+                          <button
+                            onClick={() => handleDeleteRepo(repo.id)}
+                            className="text-sm px-2 py-1 text-red-600 hover:text-red-800 font-medium"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                      <div className="space-y-2 text-sm">
+                        <div>
+                          <span className="text-gray-500">仓库地址：</span>
+                          <span className="text-gray-900 font-mono break-all">{repo.repositoryUrl}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">匹配模式：</span>
+                          <span className="text-gray-900">{repo.servicePatterns}</span>
+                        </div>
+                        {repo.defaultBranch && (
+                          <div>
+                            <span className="text-gray-500">默认分支：</span>
+                            <span className="text-gray-900">{repo.defaultBranch}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-white rounded-lg shadow p-12 text-center">
+                  <div className="text-gray-500 mb-4">暂无代码仓库配置</div>
+                  <div className="mb-4">
+                    <button
+                      onClick={handleLoadDefaultRepos}
+                      className="px-6 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors font-medium"
+                    >
+                      加载默认配置
+                    </button>
+                  </div>
+                  <div className="text-sm text-gray-400">
+                    默认配置包括：医嘱后端、收费后端、公共后端等
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'ai-config' && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold mb-6">DeepSeek API 配置</h3>
+          
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                <input
+                  type="password"
+                  value={aiConfigForm.deepseekApiKey}
+                  onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekApiKey: e.target.value })}
+                  placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                <input
+                  type="text"
+                  value={aiConfigForm.deepseekBaseUrl}
+                  onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekBaseUrl: e.target.value })}
+                  placeholder="https://api.deepseek.com/v1"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                <input
+                  type="text"
+                  value={aiConfigForm.deepseekModel}
+                  onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekModel: e.target.value })}
+                  placeholder="deepseek-chat / deepseek-coder"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+            
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="text-sm text-blue-800">
+                <p className="font-medium mb-1">提示：</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>请确保您的 DeepSeek API Key 有足够的余额</li>
+                  <li>如果 API Key 失效，请重新生成并更新</li>
+                  <li>配置会保存在本地，不用担心数据泄露</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={handleSaveAIConfig}
+                disabled={aiConfigSaving}
+                className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
+              >
+                {aiConfigSaving ? '保存中...' : '保存配置'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {repoModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-2xl">
+            <h3 className="text-xl font-semibold mb-6">
+              {editingRepo ? '编辑代码仓库' : '添加代码仓库'}
+            </h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">仓库名称 *</label>
+                <input
+                  type="text"
+                  required
+                  value={repoForm.name}
+                  onChange={(e) => setRepoForm({ ...repoForm, name: e.target.value })}
+                  placeholder="例如：医嘱后端"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">仓库地址 *</label>
+                <input
+                  type="text"
+                  required
+                  value={repoForm.repositoryUrl}
+                  onChange={(e) => setRepoForm({ ...repoForm, repositoryUrl: e.target.value })}
+                  placeholder="http://gitlab.zoesoft.com.cn/onelink/..."
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  服务匹配模式 *
+                  <span className="text-gray-500 font-normal ml-1">（逗号分隔，用于匹配日志中的服务名/URL）</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={repoForm.servicePatterns}
+                  onChange={(e) => setRepoForm({ ...repoForm, servicePatterns: e.target.value })}
+                  placeholder="pres-service,prescription"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  当日志中的服务名或URL包含任一关键词时，会匹配到此仓库
+                </p>
+              </div>
+
+              <div className="flex justify-end space-x-4 pt-4 border-t">
+                <button
+                  onClick={() => { setRepoModalOpen(false); resetRepoForm(); }}
+                  className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleSaveRepo}
+                  disabled={repoSaving}
+                  className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
+                >
+                  {repoSaving ? '保存中...' : '保存'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

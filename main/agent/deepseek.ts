@@ -78,13 +78,28 @@ export class DeepSeekClient {
     
     const requestBody: any = {
       model: this.model,
-      messages: messages.map(msg => ({
-        role: msg.role,
-        content: msg.content,
-        ...(msg.name && { name: msg.name }),
-      })),
+      messages: messages.map(msg => {
+        const formatted: any = {
+          role: msg.role,
+          content: msg.content,
+        };
+        if (msg.name) formatted.name = msg.name;
+        if (msg.toolCallId) formatted.tool_call_id = msg.toolCallId;
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          formatted.tool_calls = msg.toolCalls.map(tc => ({
+            id: tc.id || `call_${Math.random().toString(36).substring(2, 11)}`,
+            type: 'function',
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.arguments),
+            }
+          }));
+        }
+        return formatted;
+      }),
       temperature: options?.temperature ?? DEEPSEEK_CONFIG.temperature,
       max_tokens: options?.max_tokens ?? DEEPSEEK_CONFIG.maxTokens,
+      thinking: { type: 'disabled' },
     };
 
     if (options?.tools !== false) {
@@ -129,7 +144,7 @@ export class DeepSeekClient {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullContent = '';
-    let toolCalls: any[] = [];
+    const toolCallsMap = new Map<string, any>();
     const readerId = `chatcmpl-${Date.now()}`;
 
     try {
@@ -158,8 +173,30 @@ export class DeepSeekClient {
             if (delta?.content) {
               fullContent += delta.content;
             }
+            
             if (delta?.tool_calls) {
-              toolCalls = toolCalls.concat(delta.tool_calls);
+              for (const tc of delta.tool_calls) {
+                const toolCallId = tc.id || `call_${toolCallsMap.size}`;
+                const existing = toolCallsMap.get(toolCallId);
+                
+                if (existing) {
+                  if (tc.function?.name) {
+                    existing.function.name = tc.function.name;
+                  }
+                  if (tc.function?.arguments) {
+                    existing.function.arguments += tc.function.arguments;
+                  }
+                } else {
+                  toolCallsMap.set(toolCallId, {
+                    id: toolCallId,
+                    type: tc.type || 'function',
+                    function: {
+                      name: tc.function?.name || '',
+                      arguments: tc.function?.arguments || '',
+                    }
+                  });
+                }
+              }
             }
           } catch (e) {
             console.warn('Failed to parse stream chunk:', e);
@@ -170,6 +207,12 @@ export class DeepSeekClient {
       reader.releaseLock();
     }
 
+    const toolCalls = Array.from(toolCallsMap.values());
+    
+    if (toolCalls.length > 0) {
+      console.log('[STREAM] Tool calls merged:', toolCalls.length);
+    }
+    
     return {
       id: readerId,
       object: 'chat.completion',
@@ -180,14 +223,12 @@ export class DeepSeekClient {
         message: {
           role: 'assistant',
           content: fullContent,
-          tool_calls: toolCalls.length > 0 ? toolCalls.map((tc, i) => ({
-            id: tc.id || `call_${i}`,
-            type: 'function',
+          tool_calls: toolCalls.length > 0 ? toolCalls.map((tc) => ({
+            id: tc.id,
+            type: tc.type,
             function: {
-              name: tc.function?.name || '',
-              arguments: typeof tc.function?.arguments === 'string' 
-                ? tc.function.arguments 
-                : JSON.stringify(tc.function?.arguments || {}),
+              name: tc.function.name,
+              arguments: tc.function.arguments,
             }
           })) : undefined,
         },
@@ -213,18 +254,31 @@ export class DeepSeekClient {
 export function parseToolCalls(response: ChatCompletionResponse): ToolCall[] {
   const toolCalls = response.choices[0]?.message?.tool_calls || [];
   
+  if (toolCalls.length === 0) return [];
+  
+  console.log('[PARSE_TOOL_CALLS] Count:', toolCalls.length);
+  
   return toolCalls.map((tc, index) => {
-    let args: Record<string, any>;
+    let args: Record<string, any> = {};
     const argsStr = tc.function?.arguments;
+    const funcName = tc.function?.name || '';
     
     try {
-      args = typeof argsStr === 'string' ? JSON.parse(argsStr) : (argsStr || {});
-    } catch {
+      if (typeof argsStr === 'string') {
+        args = JSON.parse(argsStr);
+      } else if (typeof argsStr === 'object' && argsStr !== null) {
+        args = argsStr;
+      }
+    } catch (e) {
+      console.warn('[PARSE_TOOL_CALLS] Failed to parse args for', funcName, ':', e);
       args = {};
     }
 
+    console.log(`[PARSE_TOOL_CALLS] #${index}: ${funcName}(${JSON.stringify(args)})`);
+    
     return {
-      name: tc.function?.name || '',
+      id: tc.id || `call_${index}`,
+      name: funcName,
       arguments: args,
     };
   });

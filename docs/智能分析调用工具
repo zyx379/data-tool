@@ -1,0 +1,23 @@
+1、获取版本信息
+http://192.168.5.24:8081/portal-service/api/manage/system/getVersionInfo
+The user is asking for the token that was used in the previous API calls.
+刚才使用的 token 信息如下：
+- **apiKey**: `HIS5`
+- **onelinkToken**: `y6YdPRHBFxP82hv3F37A8eWm13l22acXXbx58/Oe6xZmIdZYoijG3EneQFr1Vgn6`
+2、应用日志
+日志api地址 http://192.168.5.24:8081/log-manage-service/log/search
+token 
+综合日志indexvalue: "log-http*"，sql日志indexvalue: "log-sql*" rpc日志indexvalue: "log-dubbo*"  控制台日志indexvalue: "zlog-normal-*" 并且logType: "normal" 参数日志 indexvalue: "zlog-normal-*"  并且logType: "param"
+前缀：ONELINK:TOKEN:
+完整 Key 示例：ONELINK:TOKEN:y6YdPRHBFxP82hv3F37A8eWm13l22acXXbx58/Oe6xZmIdZYoijG3EneQFr1Vgn6
+{pageSize: "20", pageNum: "1", indexvalue: "log-http*", logType: "http", serviceName: "", canary: "",…}
+3、获取代码
+医嘱后端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-micro-pres-fj-common
+收费后端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-micro-charge-fj-common
+公共后端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-micro-optimus-fj-common
+临床路径前端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-clinicpath-fj-common
+收费前端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-his-charge-fj-common
+药剂前端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-his-drug-fj-common
+公共前端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-his-fj-component
+门诊前端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-outp-fj-common
+医嘱前端 http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-pres-fj-common

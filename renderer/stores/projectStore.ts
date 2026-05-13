@@ -41,11 +41,24 @@ export interface ProjectConfig {
   updatedAt: string;
 }
 
+export interface CodeRepository {
+  id: string;
+  projectId: string;
+  name: string;
+  repositoryUrl: string;
+  servicePatterns: string;
+  gitLabToken?: string;
+  defaultBranch?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ProjectStore {
   projects: Project[];
   activeProject: Project | null;
   activeDataSource: DataSource | null;
   activeConfig: ProjectConfig | null;
+  codeRepositories: CodeRepository[];
   isLoading: boolean;
 
   loadProjects: () => Promise<void>;
@@ -64,6 +77,13 @@ interface ProjectStore {
 
   testDataSourceConnection: (ds: Partial<DataSource>) => Promise<{ success: boolean; message: string }>;
   executeQuery: (sql: string) => Promise<any>;
+
+  // Code repository methods
+  loadCodeRepositories: (projectId: string) => Promise<void>;
+  createCodeRepository: (repo: Omit<CodeRepository, 'id' | 'createdAt' | 'updatedAt'>) => Promise<CodeRepository>;
+  updateCodeRepository: (id: string, updates: Partial<CodeRepository>) => Promise<void>;
+  deleteCodeRepository: (id: string) => Promise<void>;
+  createDefaultCodeRepositories: (projectId: string) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectStore>()(
@@ -73,6 +93,7 @@ export const useProjectStore = create<ProjectStore>()(
       activeProject: null,
       activeDataSource: null,
       activeConfig: null,
+      codeRepositories: [],
       isLoading: false,
 
       loadProjects: async () => {
@@ -136,7 +157,7 @@ export const useProjectStore = create<ProjectStore>()(
 
       loadProjectDataSource: async (projectId) => {
         try {
-          const dataSource = await window.electronAPI.project.getDataSource(projectId);
+          const dataSource = await (window.electronAPI as any).project.getDataSource(projectId);
           set({ activeDataSource: dataSource || null });
         } catch (error) {
           console.error('Failed to load project data source:', error);
@@ -145,15 +166,15 @@ export const useProjectStore = create<ProjectStore>()(
 
       createOrUpdateDataSource: async (ds) => {
         // 先检查该项目是否已有数据源
-        const existingDataSource = await window.electronAPI.project.getDataSource(ds.projectId);
+        const existingDataSource = await (window.electronAPI as any).project.getDataSource(ds.projectId);
         let saved;
         
         if (existingDataSource) {
           // 已有数据源，执行更新
-          saved = await window.electronAPI.project.updateDataSource(existingDataSource.id, ds);
+          saved = await (window.electronAPI as any).project.updateDataSource(existingDataSource.id, ds);
         } else {
           // 没有数据源，执行创建
-          saved = await window.electronAPI.project.createDataSource(ds);
+          saved = await (window.electronAPI as any).project.createDataSource(ds);
         }
         
         set({ activeDataSource: saved });
@@ -188,6 +209,43 @@ export const useProjectStore = create<ProjectStore>()(
           throw new Error('没有选中的数据源');
         }
         return await window.electronAPI.project.executeQuery(get().activeDataSource!.id, sql);
+      },
+
+      // Code repository methods
+      loadCodeRepositories: async (projectId) => {
+        try {
+          const repos = await (window.electronAPI as any).getCodeRepositories(projectId);
+          set({ codeRepositories: repos });
+        } catch (error) {
+          console.error('Failed to load code repositories:', error);
+        }
+      },
+
+      createCodeRepository: async (repo) => {
+        const newRepo = await (window.electronAPI as any).createCodeRepository(repo);
+        set((state) => ({ codeRepositories: [...state.codeRepositories, newRepo] }));
+        return newRepo;
+      },
+
+      updateCodeRepository: async (id, updates) => {
+        const updated = await (window.electronAPI as any).updateCodeRepository(id, updates);
+        if (updated) {
+          set((state) => ({
+            codeRepositories: state.codeRepositories.map((r) => (r.id === id ? updated : r)),
+          }));
+        }
+      },
+
+      deleteCodeRepository: async (id) => {
+        await (window.electronAPI as any).deleteCodeRepository(id);
+        set((state) => ({
+          codeRepositories: state.codeRepositories.filter((r) => r.id !== id),
+        }));
+      },
+
+      createDefaultCodeRepositories: async (projectId) => {
+        await (window.electronAPI as any).createDefaultCodeRepositories(projectId);
+        await get().loadCodeRepositories(projectId);
       },
     }),
     {

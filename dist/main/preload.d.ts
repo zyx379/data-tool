@@ -8,7 +8,20 @@ export interface AnalysisRequest {
     description: string;
     logId: string;
     projectId: string;
-    aiModel: string;
+    apiBaseUrl?: string;
+    apiToken?: string;
+    apiLogPath?: string;
+    apiTokenPath?: string;
+    apiVersionPath?: string;
+}
+export interface AnalysisStepData {
+    id: string;
+    status: 'pending' | 'loading' | 'completed' | 'error';
+    title: string;
+    content: string;
+    data?: any;
+    error?: string;
+    timestamp: string;
 }
 export interface ConversationMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -21,6 +34,7 @@ export interface AnalysisResult {
     success: boolean;
     message: string;
     conversation: ConversationMessage[];
+    steps?: AnalysisStepData[];
 }
 export interface ProjectRecord {
     id: string;
@@ -59,10 +73,74 @@ export interface ProjectConfigRecord {
     createdAt: string;
     updatedAt: string;
 }
+export interface CodeRepository {
+    id: string;
+    projectId: string;
+    name: string;
+    repositoryUrl: string;
+    servicePatterns: string;
+    gitLabToken?: string;
+    defaultBranch?: string;
+    createdAt: string;
+    updatedAt: string;
+}
 export interface ActiveProjectDetails {
     project: ProjectRecord | undefined;
     dataSource: DataSourceRecord | undefined;
     config: ProjectConfigRecord | undefined;
+}
+export interface RedisConfig {
+    host: string;
+    port: number;
+    password?: string;
+    db?: number;
+}
+export interface ModuleVersion {
+    name: string;
+    version: string;
+    updateTime?: string;
+}
+export interface LogQueryParam {
+    pageSize: string;
+    pageNum: string;
+    indexvalue: string;
+    logType: string;
+    serviceName?: string;
+    canary?: string;
+    traceId?: string;
+    logLevel?: string[];
+    timestamp?: {
+        startDate: string | null;
+        endDate: string | null;
+    };
+    filterParam?: {
+        searchType: string;
+        termChecked: boolean;
+        matchChecked: boolean;
+        wildcardChecked: boolean;
+        operator?: string;
+        value?: string;
+        searchValue?: string;
+    };
+}
+export interface AnalyzedLogInfo {
+    id: string;
+    logType: string;
+    logLevel: string;
+    serviceName: string;
+    reqUrl: string;
+    httpMethod?: string;
+    httpStatus?: string;
+    clientIp?: string;
+    operator?: string;
+    runTime?: number;
+    errorClass?: string;
+    errorMessage?: string;
+    stackTrace?: string;
+    vueFile?: string;
+    requestParams?: string;
+    tags?: Record<string, any>;
+    originalLog: any;
 }
 export interface ElectronAPI {
     getDataSources: () => Promise<any[]>;
@@ -94,7 +172,70 @@ export interface ElectronAPI {
         success: boolean;
         message: string;
     }>;
+    testGetCode: (params: {
+        serviceName: string;
+        filePath?: string;
+        branch?: string;
+    }) => Promise<{
+        success: boolean;
+        data?: any;
+        error?: string;
+    }>;
     onAIStream: (callback: (content: string) => void) => () => void;
+    onAnalysisStepUpdate: (callback: (stepData: AnalysisStepData) => void) => () => void;
+    onAnalysisStepComplete: (callback: (stepData: AnalysisStepData) => void) => () => void;
+    onAnalysisStepError: (callback: (stepData: AnalysisStepData) => void) => () => void;
+    onAnalysisStreamChunk: (callback: (content: string) => void) => () => void;
+    testRedisConnection: (config: RedisConfig) => Promise<{
+        success: boolean;
+        message: string;
+    }>;
+    getRedisTokens: (config: RedisConfig, prefix?: string) => Promise<{
+        success: boolean;
+        tokens: string[];
+        message?: string;
+    }>;
+    getRedisFirstToken: (config: RedisConfig, prefix?: string) => Promise<{
+        success: boolean;
+        token: string | null;
+        message?: string;
+    }>;
+    getModuleVersions: (config: {
+        baseUrl: string;
+        versionPath?: string;
+        token: string;
+        apiKey?: string;
+        authType?: 'bearer' | 'api-key' | 'custom';
+        customHeaderName?: string;
+    }) => Promise<{
+        success: boolean;
+        modules: ModuleVersion[];
+        message?: string;
+    }>;
+    getLogs: (config: {
+        baseUrl: string;
+        logPath?: string;
+        token: string;
+        queryParam: LogQueryParam;
+        apiKey?: string;
+        authType?: 'bearer' | 'api-key' | 'custom';
+        customHeaderName?: string;
+    }) => Promise<{
+        success: boolean;
+        total: number;
+        logs: AnalyzedLogInfo[];
+        message?: string;
+    }>;
+    getCodeRepositories: (projectId: string) => Promise<CodeRepository[]>;
+    getCodeRepositoryById: (id: string) => Promise<CodeRepository | undefined>;
+    createCodeRepository: (repo: Omit<CodeRepository, 'id' | 'createdAt' | 'updatedAt'>) => Promise<CodeRepository>;
+    updateCodeRepository: (id: string, updates: Partial<CodeRepository>) => Promise<CodeRepository | undefined>;
+    deleteCodeRepository: (id: string) => Promise<void>;
+    createDefaultCodeRepositories: (projectId: string) => Promise<void>;
+    matchCodeRepository: (projectId: string, serviceName: string, requestUrl?: string) => Promise<CodeRepository | undefined>;
+    inferBranchFromTag: (tag: string) => Promise<string>;
+    getGlobalConfig: () => Promise<any>;
+    saveGlobalConfig: (config: any) => Promise<any>;
     project: {
         getAll: () => Promise<ProjectRecord[]>;
         getById: (id: string) => Promise<ProjectRecord | undefined>;

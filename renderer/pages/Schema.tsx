@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import DataSources from './DataSources';
-import { useDataSourceStore, TableInfo, TableColumn } from '../stores/dataSourceStore';
-import { useAnalysisStore, MODULE_VERSIONS, AI_MODELS, AnalysisStatus } from '../stores/analysisStore';
+import { useDataSourceStore, TableInfo, TableColumn, SavedConditionJoin } from '../stores/dataSourceStore';
+import { useAnalysisStore } from '../stores/analysisStore';
 import { useProjectStore } from '../stores/projectStore';
 
 interface TablesByOwner {
@@ -12,6 +12,12 @@ interface QueryCondition {
   columnName: string;
   operator: string;
   value: string;
+}
+
+/** 单行条件 + 稳定 id；与上一行的逻辑关系（首行无） */
+interface QueryConditionRow extends QueryCondition {
+  id: string;
+  joinWithPrevious?: SavedConditionJoin;
 }
 
 interface SortCondition {
@@ -56,6 +62,43 @@ const formatDateTime = (value: any): string => {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
+function newQueryConditionRow(columnName: string, joinWithPrevious?: SavedConditionJoin): QueryConditionRow {
+  return {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+    columnName,
+    operator: '=',
+    value: '',
+    ...(joinWithPrevious ? { joinWithPrevious } : {}),
+  };
+}
+
+function sqlFragmentForCondition(c: QueryCondition): string {
+  if (c.operator === 'LIKE') {
+    return `${c.columnName} LIKE '%${c.value}%'`;
+  }
+  if (c.operator === 'IN') {
+    return `${c.columnName} IN (${c.value})`;
+  }
+  if (c.operator === 'IS NULL' || c.operator === 'IS NOT NULL') {
+    return `${c.columnName} ${c.operator}`;
+  }
+  return `${c.columnName} ${c.operator} '${c.value}'`;
+}
+
+/** 自上而下左结合：((c0 op c1) op c2)…，与界面顺序一致 */
+function whereSqlFromRows(rows: QueryConditionRow[]): string {
+  if (rows.length === 0) return '';
+  const sanitized = rows.map((row, i) =>
+    i === 0 ? { ...row, joinWithPrevious: undefined } : { ...row, joinWithPrevious: row.joinWithPrevious ?? 'AND' }
+  );
+  let expr = sqlFragmentForCondition(sanitized[0]);
+  for (let i = 1; i < sanitized.length; i++) {
+    const join = sanitized[i].joinWithPrevious as SavedConditionJoin;
+    expr = `(${expr} ${join} ${sqlFragmentForCondition(sanitized[i])})`;
+  }
+  return expr;
+}
+
 function Schema() {
   // 主导航标签: 'query' | 'datasources' | 'analysis'
   const [activeMainTab, setActiveMainTab] = useState<'query' | 'datasources' | 'analysis'>('query');
@@ -64,7 +107,7 @@ function Schema() {
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'columns' | 'indexes' | 'query'>('columns');
   const [searchTerm, setSearchTerm] = useState('');
-  const [queryConditions, setQueryConditions] = useState<Record<string, QueryCondition[]>>({});
+  const [queryConditions, setQueryConditions] = useState<Record<string, QueryConditionRow[]>>({});
   const [sortConditions, setSortConditions] = useState<Record<string, SortCondition[]>>({});
   const [queryResults, setQueryResults] = useState<Record<string, { columns: string[]; rows: any[][] } | null>>({});
   const [isExecuting, setIsExecuting] = useState(false);
@@ -76,6 +119,9 @@ function Schema() {
   const [savedConditionName, setSavedConditionName] = useState('');
   const [hasAutoAddedDefaultFields, setHasAutoAddedDefaultFields] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState<{ x: number; y: number; tableName: string; index: number } | null>(null);
+  const [queryDropdownOpen, setQueryDropdownOpen] = useState<Record<string, boolean>>({});
+  const [sortDropdownOpen, setSortDropdownOpen] = useState<Record<string, boolean>>({});
+  const valueInputRef = useRef<Record<string, HTMLInputElement | null>>({});
   const [ownerContextMenu, setOwnerContextMenu] = useState<{ x: number; y: number; owner: string } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'table' | 'owner'; name: string; tableNames?: string[] } | null>(null);
@@ -197,8 +243,9 @@ function Schema() {
 
     const columns = conditions.map(c => c.columnName);
     const operators = conditions.map(c => c.operator);
-    
-    saveQueryConditionTemplate(savedConditionName.trim(), activeTabKey, columns, operators);
+    const joins: SavedConditionJoin[] = conditions.slice(1).map((r) => r.joinWithPrevious ?? 'AND');
+
+    saveQueryConditionTemplate(savedConditionName.trim(), activeTabKey, columns, operators, joins);
     setSavedConditionName('');
     setShowSaveConditionModal(false);
   };
@@ -206,10 +253,12 @@ function Schema() {
   const loadQueryConditionTemplate = (template: any) => {
     if (!activeTabKey) return;
     
-    const newConditions = template.columns.map((col: string, idx: number) => ({
-      columnName: col,
+    const joins = template.joins;
+    const newConditions: QueryConditionRow[] = template.columns.map((col: string, idx: number) =>
+      newQueryConditionRow(col, idx === 0 ? undefined : joins?.[idx - 1] ?? 'AND')
+    ).map((row, idx) => ({
+      ...row,
       operator: template.operators[idx] || '=',
-      value: ''
     }));
     
     setQueryConditions({
@@ -230,7 +279,6 @@ function Schema() {
 
   const {
     activeDataSource,
-    activeProject,
     loadActiveProjectDetails,
     executeQuery: executeProjectQuery,
   } = useProjectStore();
@@ -264,7 +312,6 @@ function Schema() {
     removeTables,
     saveQueryConditionTemplate,
     getQueryConditionTemplatesForTable,
-    loadSchema,
   } = useDataSourceStore();
 
   useEffect(() => {
@@ -380,17 +427,32 @@ function Schema() {
 
   const addQueryCondition = (tableName: string, columnName: string) => {
     const currentConditions = queryConditions[tableName] || [];
+    const join: SavedConditionJoin | undefined = currentConditions.length === 0 ? undefined : 'AND';
+    const row = newQueryConditionRow(columnName, join);
+    const newIndex = currentConditions.length;
     setQueryConditions({
       ...queryConditions,
-      [tableName]: [...currentConditions, { columnName, operator: '=', value: '' }]
+      [tableName]: [...currentConditions, row]
     });
+    // 关闭查询条件下拉
+    setQueryDropdownOpen(prev => ({ ...prev, [tableName]: false }));
+    // 延迟聚焦到值输入框
+    setTimeout(() => {
+      const key = `${tableName}-${row.id}`;
+      if (valueInputRef.current && valueInputRef.current[key]) {
+        valueInputRef.current[key]?.focus();
+      }
+    }, 50);
   };
 
   const removeQueryCondition = (tableName: string, index: number) => {
     const currentConditions = queryConditions[tableName] || [];
+    const next = currentConditions
+      .filter((_, i) => i !== index)
+      .map((r, i) => (i === 0 ? { ...r, joinWithPrevious: undefined as undefined } : r));
     setQueryConditions({
       ...queryConditions,
-      [tableName]: currentConditions.filter((_, i) => i !== index)
+      [tableName]: next
     });
   };
 
@@ -404,12 +466,25 @@ function Schema() {
     });
   };
 
+  const updateConditionJoin = (tableName: string, index: number, join: SavedConditionJoin) => {
+    if (index <= 0) return;
+    const currentConditions = queryConditions[tableName] || [];
+    const newConditions = [...currentConditions];
+    newConditions[index] = { ...newConditions[index], joinWithPrevious: join };
+    setQueryConditions({
+      ...queryConditions,
+      [tableName]: newConditions
+    });
+  };
+
   const addSortCondition = (tableName: string, columnName: string) => {
     const currentConditions = sortConditions[tableName] || [];
     setSortConditions({
       ...sortConditions,
-      [tableName]: [...currentConditions, { columnName, order: 'ASC' }]
+      [tableName]: [...currentConditions, { columnName, order: 'DESC' }]
     });
+    // 关闭排序条件下拉
+    setSortDropdownOpen(prev => ({ ...prev, [tableName]: false }));
   };
 
   const removeSortCondition = (tableName: string, index: number) => {
@@ -445,21 +520,9 @@ function Schema() {
     
     let sql = `SELECT ${selectColumns} FROM ${table.tableName}`;
     
-    const conditions = queryConditions[tableName] || [];
-    if (conditions.length > 0) {
-      const whereClauses = conditions.map(c => {
-        if (c.operator === 'LIKE') {
-          return `${c.columnName} LIKE '%${c.value}%'`;
-        }
-        if (c.operator === 'IN') {
-          return `${c.columnName} IN (${c.value})`;
-        }
-        if (c.operator === 'IS NULL' || c.operator === 'IS NOT NULL') {
-          return `${c.columnName} ${c.operator}`;
-        }
-        return `${c.columnName} ${c.operator} '${c.value}'`;
-      });
-      sql += ` WHERE ${whereClauses.join(' AND ')}`;
+    const rows = queryConditions[tableName] || [];
+    if (rows.length > 0) {
+      sql += ` WHERE ${whereSqlFromRows(rows)}`;
     }
     
     const sorts = sortConditions[tableName] || [];
@@ -574,17 +637,6 @@ function Schema() {
             <span>数据查询</span>
           </button>
           <button
-            onClick={() => setActiveMainTab('datasources')}
-            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
-              activeMainTab === 'datasources'
-                ? 'bg-blue-500 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-            }`}
-          >
-            <span>🔌</span>
-            <span>项目管理</span>
-          </button>
-          <button
             onClick={() => setActiveMainTab('analysis')}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
               activeMainTab === 'analysis'
@@ -594,6 +646,17 @@ function Schema() {
           >
             <span>🤖</span>
             <span>智能分析</span>
+          </button>
+          <button
+            onClick={() => setActiveMainTab('datasources')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
+              activeMainTab === 'datasources'
+                ? 'bg-blue-500 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <span>🔌</span>
+            <span>项目管理</span>
           </button>
         </nav>
       </div>
@@ -1041,8 +1104,8 @@ function Schema() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {activeTable.tableInfo.indexes.map((idx) => (
-                          <tr key={idx.indexName} className="hover:bg-gray-50">
+                        {activeTable.tableInfo.indexes.map((idx, index) => (
+                          <tr key={`${idx.indexName}-${idx.columnName}-${index}`} className="hover:bg-gray-50">
                             <td className="px-3 py-2 font-mono text-sm">{idx.indexName}</td>
                             <td className="px-3 py-2 font-mono text-sm">{idx.columnName}</td>
                             <td className="px-3 py-2 text-sm">{idx.indexType}</td>
@@ -1103,84 +1166,191 @@ function Schema() {
                       </div>
 
                       <div className="px-4 pb-4 space-y-3">
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-medium text-gray-600 whitespace-nowrap">查询条件:</span>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {(queryConditions[activeTable.tableName] || []).map((condition, index) => {
-                                const column = activeTable.tableInfo.columns.find(c => c.columnName === condition.columnName);
-                                return (
-                                  <div key={index} className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
-                                    <span className="font-mono text-xs whitespace-nowrap">{column ? getColumnDisplayName(column) : condition.columnName}</span>
-                                    <select
-                                      value={condition.operator}
-                                      onChange={(e) => updateQueryCondition(activeTable.tableName, index, 'operator', e.target.value)}
-                                      className="border-0 text-xs py-0 px-1 bg-transparent"
-                                    >
-                                      <option value="=">=</option>
-                                      <option value="!=">!=</option>
-                                      <option value=">">&gt;</option>
-                                      <option value=">=">&gt;=</option>
-                                      <option value="<">&lt;</option>
-                                      <option value="<=">&lt;=</option>
-                                      <option value="LIKE">LIKE</option>
-                                      <option value="IN">IN</option>
-                                      <option value="IS NULL">NULL</option>
-                                      <option value="IS NOT NULL">NOT NULL</option>
-                                    </select>
-                                    {condition.operator !== 'IS NULL' && condition.operator !== 'IS NOT NULL' && (
-                                      <input
-                                        type="text"
-                                        value={condition.value}
-                                        onChange={(e) => updateQueryCondition(activeTable.tableName, index, 'value', e.target.value)}
-                                        placeholder="值"
-                                        className="border-0 text-xs py-0 px-1 w-24 bg-transparent"
-                                      />
-                                    )}
-                                    <button onClick={() => removeQueryCondition(activeTable.tableName, index)} className="text-red-500 hover:text-red-700 ml-1">
-                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                      </svg>
-                                    </button>
-                                  </div>
-                                );
-                              })}
+                        <div className="rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm">
+                          <div className="flex flex-col gap-2 border-b border-slate-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <span className="text-xs font-semibold text-slate-700">查询条件</span>
+                              <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                                自上而下组合；AND / OR 表示与「上一条完整条件」的关系，生成 WHERE 时按该顺序加括号。
+                              </p>
+                            </div>
+                            <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
+                              {(queryConditions[activeTable.tableName] || []).length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowSaveConditionModal(true)}
+                                  className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                                >
+                                  保存为模板
+                                </button>
+                              )}
                               {getUsedColumns(activeTable.tableInfo).length > 0 && (
                                 <div className="relative">
                                   <input
                                     type="text"
-                                    list={`columns-datalist-${activeTable.tableName}`}
                                     placeholder="+ 添加字段"
-                                    className="border border-gray-300 rounded px-2 py-1 text-xs bg-white w-32"
-                                    onChange={(e) => {
-                                      const value = e.target.value;
-                                      if (value) {
-                                        const validColumns = getUsedColumns(activeTable.tableInfo).map(c => c.columnName);
-                                        if (validColumns.includes(value)) {
-                                          addQueryCondition(activeTable.tableName, value);
-                                          e.target.value = '';
+                                    className="w-36 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                    onFocus={() => setQueryDropdownOpen((prev) => ({ ...prev, [activeTable.tableName]: true }))}
+                                    onBlur={() => {
+                                      setTimeout(() => {
+                                        setQueryDropdownOpen((prev) => ({ ...prev, [activeTable.tableName]: false }));
+                                        const inputEl = document.querySelector(
+                                          `[data-table="${activeTable.tableName}"][role="query-input"]`
+                                        ) as HTMLInputElement;
+                                        if (inputEl) inputEl.value = '';
+                                      }, 200);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if ((e as React.KeyboardEvent<HTMLInputElement>).key === 'Enter') {
+                                        const inputEl = e.currentTarget;
+                                        const val = inputEl.value.trim();
+                                        if (val) {
+                                          const validColumns = getUsedColumns(activeTable.tableInfo).map((c) => c.columnName);
+                                          const match = validColumns.find((c) => c.toLowerCase() === val.toLowerCase());
+                                          if (match) {
+                                            addQueryCondition(activeTable.tableName, match);
+                                            inputEl.value = '';
+                                          }
                                         }
                                       }
                                     }}
+                                    data-table={activeTable.tableName}
+                                    role="query-input"
                                   />
-                                  <datalist id={`columns-datalist-${activeTable.tableName}`}>
-                                    {getUsedColumns(activeTable.tableInfo).map(col => (
-                                      <option key={col.columnName} value={col.columnName}>
-                                        {getColumnDisplayName(col)}
-                                      </option>
-                                    ))}
-                                  </datalist>
+                                  {queryDropdownOpen[activeTable.tableName] && (
+                                    <div className="absolute left-0 top-full z-50 mt-1 max-h-48 min-w-[10rem] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                                      {getUsedColumns(activeTable.tableInfo)
+                                        .filter((col) => {
+                                          const inputEl = document.activeElement as HTMLInputElement;
+                                          const filterText = inputEl?.value?.toLowerCase() || '';
+                                          return (
+                                            !filterText ||
+                                            col.columnName.toLowerCase().includes(filterText) ||
+                                            getColumnDisplayName(col).toLowerCase().includes(filterText)
+                                          );
+                                        })
+                                        .map((col) => (
+                                          <div
+                                            key={col.columnName}
+                                            className="cursor-pointer px-3 py-1.5 text-xs hover:bg-blue-50"
+                                            onMouseDown={(e) => {
+                                              e.preventDefault();
+                                              addQueryCondition(activeTable.tableName, col.columnName);
+                                            }}
+                                          >
+                                            <span className="font-mono">{col.columnName}</span>
+                                            <span className="ml-1 text-slate-400">{getColumnDisplayName(col)}</span>
+                                          </div>
+                                        ))}
+                                    </div>
+                                  )}
                                 </div>
                               )}
-                              {(queryConditions[activeTable.tableName] || []).length > 0 && (
-                                <button
-                                  onClick={() => setShowSaveConditionModal(true)}
-                                  className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded hover:bg-green-200 transition-colors"
-                                >
-                                  保存
-                                </button>
-                              )}
                             </div>
+                          </div>
+
+                          <div className="max-h-64 overflow-y-auto px-3 py-3">
+                            {(queryConditions[activeTable.tableName] || []).length === 0 ? (
+                              <p className="py-8 text-center text-xs text-slate-400">暂无条件，使用上方「添加字段」从已标记列中选择</p>
+                            ) : (
+                              (queryConditions[activeTable.tableName] || []).map((condition, index) => {
+                                const column = activeTable.tableInfo.columns.find((c) => c.columnName === condition.columnName);
+                                const join = condition.joinWithPrevious ?? 'AND';
+                                return (
+                                  <div key={condition.id} className={index > 0 ? 'mt-1' : ''}>
+                                    {index > 0 && (
+                                      <div className="flex justify-center py-2">
+                                        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 shadow-sm">
+                                          <button
+                                            type="button"
+                                            onClick={() => updateConditionJoin(activeTable.tableName, index, 'AND')}
+                                            className={`rounded-md px-3 py-1 text-[11px] font-semibold transition-colors ${
+                                              join === 'AND'
+                                                ? 'bg-slate-800 text-white'
+                                                : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                                            }`}
+                                          >
+                                            AND
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => updateConditionJoin(activeTable.tableName, index, 'OR')}
+                                            className={`rounded-md px-3 py-1 text-[11px] font-semibold transition-colors ${
+                                              join === 'OR'
+                                                ? 'bg-amber-600 text-white'
+                                                : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                                            }`}
+                                          >
+                                            OR
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm">
+                                      <span
+                                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-bold text-slate-600"
+                                        title={`条件 ${index + 1}`}
+                                      >
+                                        {index + 1}
+                                      </span>
+                                      <div className="min-w-0 max-w-[10rem] flex-shrink-0">
+                                        <div className="truncate font-mono text-[11px] text-slate-900" title={condition.columnName}>
+                                          {condition.columnName}
+                                        </div>
+                                        {column?.comments ? (
+                                          <div className="truncate text-[10px] text-slate-400" title={column.comments}>
+                                            {getColumnDisplayName(column)}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                      <select
+                                        value={condition.operator}
+                                        onChange={(e) =>
+                                          updateQueryCondition(activeTable.tableName, index, 'operator', e.target.value)
+                                        }
+                                        className="rounded border border-slate-200 bg-white py-1 pl-1 pr-6 text-xs text-slate-800"
+                                      >
+                                        <option value="=">=</option>
+                                        <option value="!=">!=</option>
+                                        <option value=">">&gt;</option>
+                                        <option value=">=">&gt;=</option>
+                                        <option value="<">&lt;</option>
+                                        <option value="<=">&lt;=</option>
+                                        <option value="LIKE">LIKE</option>
+                                        <option value="IN">IN</option>
+                                        <option value="IS NULL">NULL</option>
+                                        <option value="IS NOT NULL">NOT NULL</option>
+                                      </select>
+                                      {condition.operator !== 'IS NULL' && condition.operator !== 'IS NOT NULL' && (
+                                        <input
+                                          ref={(el) => {
+                                            const key = `${activeTable.tableName}-${condition.id}`;
+                                            valueInputRef.current[key] = el;
+                                          }}
+                                          type="text"
+                                          value={condition.value}
+                                          onChange={(e) =>
+                                            updateQueryCondition(activeTable.tableName, index, 'value', e.target.value)
+                                          }
+                                          placeholder="值"
+                                          className="min-w-[6rem] flex-1 rounded border border-transparent bg-slate-50 px-2 py-1 text-xs focus:border-blue-400 focus:bg-white focus:outline-none"
+                                        />
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => removeQueryCondition(activeTable.tableName, index)}
+                                        className="ml-auto flex-shrink-0 text-red-500 hover:text-red-700"
+                                        title="移除此条件"
+                                      >
+                                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
                           </div>
                         </div>
 
@@ -1213,27 +1383,56 @@ function Schema() {
                                 <div className="relative">
                                   <input
                                     type="text"
-                                    list={`sort-datalist-${activeTable.tableName}`}
                                     placeholder="+ 添加字段"
                                     className="border border-gray-300 rounded px-2 py-1 text-xs bg-white w-32"
-                                    onChange={(e) => {
-                                      const value = e.target.value;
-                                      if (value) {
-                                        const validColumns = getUsedColumns(activeTable.tableInfo).map(c => c.columnName);
-                                        if (validColumns.includes(value)) {
-                                          addSortCondition(activeTable.tableName, value);
-                                          e.target.value = '';
-                                        }
-                                      }
-                                    }}
+                                    onFocus={(e) => setSortDropdownOpen(prev => ({ ...prev, [activeTable.tableName]: true }))}
+                                    onBlur={() => {
+              setTimeout(() => {
+                setSortDropdownOpen(prev => ({ ...prev, [activeTable.tableName]: false }));
+                const inputEl = document.querySelector(`[data-table="${activeTable.tableName}"][role="sort-input"]`) as HTMLInputElement;
+                if (inputEl) inputEl.value = '';
+              }, 200);
+            }}
+            onKeyDown={(e) => {
+              if ((e as React.KeyboardEvent<HTMLInputElement>).key === 'Enter') {
+                const inputEl = e.currentTarget;
+                const val = inputEl.value.trim();
+                if (val) {
+                  const validColumns = getUsedColumns(activeTable.tableInfo).map(c => c.columnName);
+                  const match = validColumns.find(c => c.toLowerCase() === val.toLowerCase());
+                  if (match) {
+                    addSortCondition(activeTable.tableName, match);
+                    inputEl.value = '';
+                  }
+                }
+              }
+            }}
+            data-table={activeTable.tableName}
+            role="sort-input"
                                   />
-                                  <datalist id={`sort-datalist-${activeTable.tableName}`}>
-                                    {getUsedColumns(activeTable.tableInfo).map(col => (
-                                      <option key={col.columnName} value={col.columnName}>
-                                        {getColumnDisplayName(col)}
-                                      </option>
-                                    ))}
-                                  </datalist>
+                                  {sortDropdownOpen[activeTable.tableName] && (
+                                    <div className="absolute z-50 top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto min-w-40">
+                                      {getUsedColumns(activeTable.tableInfo)
+                                        .filter(col => {
+                                          const inputEl = document.activeElement as HTMLInputElement;
+                                          const filterText = inputEl?.value?.toLowerCase() || '';
+                                          return !filterText || col.columnName.toLowerCase().includes(filterText) || getColumnDisplayName(col).toLowerCase().includes(filterText);
+                                        })
+                                        .map(col => (
+                                          <div
+                                            key={col.columnName}
+                                            className="px-3 py-1.5 text-xs cursor-pointer hover:bg-blue-50"
+                                            onMouseDown={(e) => {
+                                              e.preventDefault();
+                                              addSortCondition(activeTable.tableName, col.columnName);
+                                            }}
+                                          >
+                                            <span className="font-mono">{col.columnName}</span>
+                                            <span className="text-gray-400 ml-1">{getColumnDisplayName(col)}</span>
+                                          </div>
+                                        ))}
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1412,9 +1611,7 @@ function Schema() {
                     if (schemaFilterPattern) {
                       addSchemaFilterHistory(schemaFilterPattern);
                     }
-                    if (activeDataSource?.id) {
-                      refreshSchema(activeDataSource.id);
-                    }
+                    refreshSchema();
                     setShowRefreshModal(false);
                   }
                 }}
@@ -1428,9 +1625,7 @@ function Schema() {
                   if (schemaFilterPattern) {
                     addSchemaFilterHistory(schemaFilterPattern);
                   }
-                  if (activeDataSource?.id) {
-                    refreshSchemaWithMerge(activeDataSource.id);
-                  }
+                  refreshSchemaWithMerge();
                   setShowRefreshModal(false);
                 }}
                 disabled={schemaLoading || !activeDataSource?.id}
@@ -1673,9 +1868,7 @@ function Schema() {
                   if (schemaFilterPattern) {
                     addSchemaFilterHistory(schemaFilterPattern);
                   }
-                  if (activeDataSource?.id) {
-                    refreshSchema(activeDataSource.id);
-                  }
+                  refreshSchema();
                   setShowRefreshModal(false);
                   setShowOverwriteConfirm(false);
                 }}
@@ -1693,204 +1886,175 @@ function Schema() {
   );
 }
 
-// ==================== 智能分析模块 ====================
+// ==================== 智能分析模块（重构版） ====================
 
 function AnalysisPage() {
-  // Store
   const {
-    records,
-    currentRecord,
-    createRecord,
-    deleteRecord,
-    setCurrentRecord,
-    updateStatus,
+    analysisRecords,
+    currentRecordId,
+    isAnalyzing,
+    formDescription,
+    formLogId,
+    deepAnalysisStreamContent,
+    setFormDescription,
+    setFormLogId,
+    clearForm,
     startAnalysis,
-    sendChatMessage,
+    updateStep,
+    completeStep,
+    errorStep,
+    appendStreamChunk,
+    clearStreamContent,
+    finishAnalysis,
+    deleteRecord,
+    clearAllRecords,
   } = useAnalysisStore();
 
-  // 项目 Store（获取当前激活的项目）
   const { activeProject } = useProjectStore();
+  const [view, setView] = useState<'new' | 'history' | 'detail'>('new');
 
-  // 子页面状态
-  const [analysisView, setAnalysisView] = useState<'new' | 'history' | 'detail'>('new');
+  const currentRecord = analysisRecords.find(r => r.id === currentRecordId) || null;
 
-  // 新建分析表单
-  const [description, setDescription] = useState('');
-  const [logId, setLogId] = useState('');
-  const [aiModel, setAiModel] = useState('deepseek-chat');
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  useEffect(() => {
+    const cleanups: (() => void)[] = [];
 
-  // 对话输入
-  const [chatInput, setChatInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
+    if (window.electronAPI?.onAnalysisStepUpdate) {
+      cleanups.push(window.electronAPI.onAnalysisStepUpdate((stepData) => {
+        updateStep(stepData);
+      }));
+    }
+    if (window.electronAPI?.onAnalysisStepComplete) {
+      cleanups.push(window.electronAPI.onAnalysisStepComplete((stepData) => {
+        completeStep(stepData);
+      }));
+    }
+    if (window.electronAPI?.onAnalysisStepError) {
+      cleanups.push(window.electronAPI.onAnalysisStepError((stepData) => {
+        errorStep(stepData);
+        if (stepData.id === 'match_repository' || stepData.id === 'fetch_version_and_code') {
+          finishAnalysis(stepData.error);
+        }
+      }));
+    }
+    if (window.electronAPI?.onAnalysisStreamChunk) {
+      cleanups.push(window.electronAPI.onAnalysisStreamChunk((content) => {
+        appendStreamChunk(content);
+      }));
+    }
 
-  // 状态选择
-  const [selectedStatus, setSelectedStatus] = useState<AnalysisStatus>('unconfirmed');
-  const [feedbackText, setFeedbackText] = useState('');
+    return () => cleanups.forEach(fn => fn());
+  }, [updateStep, completeStep, errorStep, appendStreamChunk, finishAnalysis]);
 
-  // 开始分析
   const handleStartAnalysis = async () => {
-    if (!description.trim() || !logId.trim()) {
+    if (!formDescription.trim() || !formLogId.trim()) {
       alert('请填写问题描述和日志 ID');
       return;
     }
-
-    if (!activeProject || !activeProject.id) {
+    if (!activeProject?.id) {
       alert('请先在项目管理中选择一个项目');
       return;
     }
 
-    // 创建记录
-    const record = createRecord({
-      description,
-      logId,
-      projectId: activeProject.id,
-      projectName: activeProject.name,
-      aiModel,
-    });
+    const recordId = `analysis_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    startAnalysis(recordId, formDescription, formLogId, activeProject.id, activeProject.name);
+    setView('detail');
+    clearStreamContent();
 
-    // 清空表单，跳转到详情
-    setDescription('');
-    setLogId('');
-    setCurrentRecord(record);
-    setAnalysisView('detail');
-    setIsAnalyzing(true);
-
-    // 调用真实的 AI 分析
     try {
-      await startAnalysis(record.id);
-    } finally {
-      setIsAnalyzing(false);
+      const result = await (window.electronAPI as any).startAnalysis({
+        description: formDescription,
+        logId: formLogId,
+        projectId: activeProject.id,
+      });
+
+      if (!result.success) {
+        finishAnalysis(result.message || '分析失败');
+      } else {
+        finishAnalysis();
+      }
+    } catch (error) {
+      finishAnalysis((error as Error).message || '分析过程发生未知错误');
     }
   };
 
-  // 发送对话消息
-  const handleSendMessage = async () => {
-    if (!chatInput.trim() || !currentRecord) return;
-
-    const userInput = chatInput;
-    setChatInput('');
-    setIsSending(true);
-
-    try {
-      await sendChatMessage(currentRecord.id, userInput);
-    } finally {
-      setIsSending(false);
-    }
-  };
-
-  // 保存状态
-  const handleSaveStatus = () => {
-    if (!currentRecord) return;
-    updateStatus(currentRecord.id, selectedStatus, feedbackText);
-    alert('状态已保存');
-  };
-
-  // 删除记录
-  const handleDelete = (id: string) => {
+  const handleDeleteRecord = (id: string) => {
     if (confirm('确定要删除这条分析记录吗？')) {
       deleteRecord(id);
     }
   };
 
-  // 渲染新建分析表单
+  const getStepIcon = (id: string) => {
+    const icons: Record<string, string> = {
+      query_log: '🔍',
+      identify_service: '🤔',
+      match_repository: '📦',
+      fetch_version_and_code: '📥',
+      deep_analysis: '🧠',
+      conclusion: '📋',
+    };
+    return icons[id] || '📌';
+  };
+
+  const getStepStatusBadge = (status: string) => {
+    switch (status) {
+      case 'loading':
+        return <span className="inline-flex items-center gap-1 text-blue-600 text-xs"><svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>执行中</span>;
+      case 'completed':
+        return <span className="text-green-600 text-xs">✅ 完成</span>;
+      case 'error':
+        return <span className="text-red-600 text-xs">❌ 失败</span>;
+      default:
+        return <span className="text-gray-400 text-xs">⏳ 等待中</span>;
+    }
+  };
+
   const renderNewAnalysis = () => (
     <div className="max-w-2xl mx-auto">
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold text-gray-800">新建分析</h2>
         </div>
-
         <div className="p-6 space-y-5">
-          {/* 问题描述 */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               问题描述 <span className="text-red-500">*</span>
             </label>
             <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              value={formDescription}
+              onChange={(e) => setFormDescription(e.target.value)}
               placeholder="请描述遇到的问题..."
               rows={3}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
             />
           </div>
-
-          {/* 日志 ID */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               日志 ID <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
-              value={logId}
-              onChange={(e) => setLogId(e.target.value)}
-              placeholder="例如：LOG-20240115-001"
+              value={formLogId}
+              onChange={(e) => setFormLogId(e.target.value)}
+              placeholder="例如：4028838a8e0d3f3f018e..."
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
-
-          {/* 数据源（只读展示） */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">项目</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">项目（自动读取）</label>
             <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-gray-600">
-              {activeProject ? (
-                activeProject.name
-              ) : (
-                <span className="text-red-500">未选择项目</span>
-              )}
+              {activeProject ? activeProject.name : <span className="text-red-500">未选择项目</span>}
             </div>
           </div>
-
-          {/* 模块版本 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">模块版本</label>
-            <div className="bg-gray-50 border border-gray-200 rounded-md p-3 max-h-48 overflow-y-auto">
-              <div className="grid grid-cols-2 gap-2">
-                {MODULE_VERSIONS.map((module) => (
-                  <div key={module.name} className="flex justify-between text-sm py-1 px-2 bg-white rounded">
-                    <span className="text-gray-700">{module.name}</span>
-                    <span className="text-gray-500 font-mono">{module.version}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* AI 模型 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">AI 模型</label>
-            <select
-              value={aiModel}
-              onChange={(e) => setAiModel(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              {AI_MODELS.map((model) => (
-                <option key={model.value} value={model.value}>
-                  {model.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* 按钮 */}
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              onClick={() => {
-                setDescription('');
-                setLogId('');
-              }}
-              className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
-            >
-              清空
-            </button>
+          <div className="flex justify-end gap-3 pt-2">
+            <button onClick={clearForm} className="px-4 py-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors">清空</button>
             <button
               onClick={handleStartAnalysis}
-              disabled={!activeProject}
-              className="px-6 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={isAnalyzing}
+              className="px-6 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
-              <span>▶</span>
-              <span>开始分析</span>
+              {isAnalyzing ? (
+                <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>分析中</>
+              ) : '开始分析'}
             </button>
           </div>
         </div>
@@ -1898,64 +2062,50 @@ function AnalysisPage() {
     </div>
   );
 
-  // 渲染分析历史
   const renderHistory = () => (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-      <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+    <div className="max-w-4xl mx-auto">
+      <div className="flex justify-between items-center mb-4">
         <h2 className="text-lg font-semibold text-gray-800">分析历史</h2>
-        <button
-          onClick={() => setAnalysisView('new')}
-          className="px-4 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors"
-        >
-          + 新建分析
-        </button>
+        {analysisRecords.length > 0 && (
+          <button onClick={() => { if (confirm('确定清空全部？')) clearAllRecords(); }}
+            className="text-sm text-red-600 hover:text-red-800">清空全部</button>
+        )}
       </div>
-
-      <div className="overflow-x-auto">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         <table className="w-full">
-          <thead className="bg-gray-50">
+          <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">标题</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">描述</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">问题描述</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">项目</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">操作</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {records.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
-                  暂无分析记录
-                </td>
-              </tr>
+            {analysisRecords.length === 0 ? (
+              <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">暂无分析记录</td></tr>
             ) : (
-              records.map((record) => (
+              analysisRecords.map((record) => (
                 <tr key={record.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm font-medium text-gray-900">{record.title}</td>
-                  <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">{record.description}</td>
-                  <td className="px-4 py-3 text-sm text-gray-500">{record.createdAt}</td>
                   <td className="px-4 py-3">
-                    <StatusBadge status={record.status} />
+                    <div className="text-sm text-gray-800 truncate max-w-xs">{record.description}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">日志: {record.logId}</div>
                   </td>
-                  <td className="px-4 py-3 space-x-2">
-                    <button
-                      onClick={() => {
-                        setCurrentRecord(record);
-                        setSelectedStatus(record.status);
-                        setFeedbackText(record.feedback || '');
-                        setAnalysisView('detail');
-                      }}
-                      className="text-blue-600 hover:text-blue-800 text-sm"
-                    >
-                      查看
-                    </button>
-                    <button
-                      onClick={() => handleDelete(record.id)}
-                      className="text-red-600 hover:text-red-800 text-sm"
-                    >
-                      删除
-                    </button>
+                  <td className="px-4 py-3 text-sm text-gray-500">{record.projectName}</td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{new Date(record.timestamp).toLocaleString('zh-CN')}</td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-1 text-xs rounded-full ${
+                      record.status === 'completed' ? 'bg-green-100 text-green-800'
+                        : record.status === 'analyzing' ? 'bg-blue-100 text-blue-800'
+                          : 'bg-red-100 text-red-800'
+                    }`}>
+                      {record.status === 'completed' ? '已完成' : record.status === 'analyzing' ? '分析中' : '错误'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right space-x-2">
+                    <button onClick={() => setView('detail')} className="text-blue-600 hover:text-blue-800 text-sm">查看</button>
+                    <button onClick={() => handleDeleteRecord(record.id)} className="text-red-600 hover:text-red-800 text-sm">删除</button>
                   </td>
                 </tr>
               ))
@@ -1966,198 +2116,130 @@ function AnalysisPage() {
     </div>
   );
 
-  // 渲染分析详情
   const renderDetail = () => {
-    if (!currentRecord) return null;
+    if (!currentRecord) return (
+      <div className="text-center text-gray-500 py-8">未找到分析记录</div>
+    );
 
-    // 获取最新的记录数据
-    const record = records.find(r => r.id === currentRecord.id) || currentRecord;
+    const record = currentRecord;
+    const sortedSteps = [...record.steps].sort((a, b) =>
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
 
     return (
-      <div className="space-y-4">
-        {/* 返回按钮 */}
-        <button
-          onClick={() => {
-            setCurrentRecord(null);
-            setAnalysisView('history');
-          }}
-          className="text-blue-600 hover:text-blue-800 flex items-center gap-1"
-        >
+      <div className="max-w-4xl mx-auto space-y-4">
+        <button onClick={() => setView('history')} className="text-blue-600 hover:text-blue-800 flex items-center gap-1 text-sm">
           ← 返回列表
         </button>
 
-        {/* AI 分析结果 */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-800">AI 分析</h2>
-            {isAnalyzing && (
-              <span className="flex items-center text-sm text-blue-600">
-                <svg className="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                AI 正在分析中...
-              </span>
-            )}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div className="flex items-center gap-3 text-sm text-gray-600 mb-1">
+            <span className="text-gray-400">问题描述：</span>
+            <span className="text-gray-800">{record.description}</span>
           </div>
-          <div className="p-6 max-h-[500px] overflow-y-auto">
-            <div className="space-y-4">
-              {record.conversation.length > 0 ? (
-                record.conversation.map((msg) => (
-                  <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div
-                      className={`max-w-[80%] px-4 py-3 rounded-lg ${
-                        msg.role === 'user'
-                          ? 'bg-blue-500 text-white'
-                          : msg.role === 'tool'
-                          ? 'bg-amber-50 text-amber-900 border border-amber-200'
-                          : 'bg-gray-100 text-gray-800'
-                      }`}
-                    >
-                      <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {msg.content}
-                      </div>
-                      <div className={`text-xs mt-1 ${msg.role === 'user' ? 'text-blue-100' : 'text-gray-400'}`}>
-                        {msg.timestamp}
-                        {msg.name && ` • ${msg.name}`}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="text-gray-500 text-center">暂无分析结果</p>
-              )}
+          <div className="flex items-center gap-3 text-sm text-gray-600">
+            <span className="text-gray-400">日志ID：</span>
+            <span className="font-mono text-xs">{record.logId}</span>
+          </div>
+        </div>
 
-              {(record.status === 'analyzing' || isAnalyzing) && (
-                <div className="flex items-center gap-2 text-gray-500">
-                  <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  <span>AI 正在分析中，请稍候...</span>
-                </div>
-              )}
+        {sortedSteps.map((step) => (
+          <div key={step.id} className={`bg-white rounded-lg shadow-sm border ${
+            step.status === 'error' ? 'border-red-300 bg-red-50' : 'border-gray-200'
+          }`}>
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-700">
+                {getStepIcon(step.id)} {step.title}
+              </h3>
+              {getStepStatusBadge(step.status)}
             </div>
-          </div>
-        </div>
 
-        {/* 对话输入 */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !isSending && handleSendMessage()}
-              placeholder="输入补充信息继续分析..."
-              disabled={isSending || isAnalyzing}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-            />
-            <button
-              onClick={handleSendMessage}
-              disabled={!chatInput.trim() || isSending || isAnalyzing}
-              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {isSending && (
-                <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-              )}
-              {isSending ? '发送中' : '发送'}
-            </button>
-          </div>
-        </div>
-
-        {/* 状态操作 */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="flex items-center gap-4">
-            <label className="text-sm font-medium text-gray-700">状态：</label>
-            <select
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value as AnalysisStatus)}
-              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="analyzing">分析中</option>
-              <option value="completed">已完成</option>
-              <option value="unconfirmed">未确认</option>
-              <option value="resolved">已解决</option>
-              <option value="unresolved">未解决</option>
-            </select>
-
-            {selectedStatus === 'unresolved' && (
-              <input
-                type="text"
-                value={feedbackText}
-                onChange={(e) => setFeedbackText(e.target.value)}
-                placeholder="请填写反馈..."
-                className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+            {(step.status === 'completed' || step.status === 'error') && (
+              <div className="p-5">
+                {step.status === 'error' && step.error && (
+                  <div className="mb-3 p-3 bg-red-100 border border-red-200 rounded-md text-sm text-red-700">
+                    <strong>错误：</strong>{step.error}
+                  </div>
+                )}
+                {step.content && (
+                  <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                    {step.content}
+                  </div>
+                )}
+                {!step.content && !step.error && (
+                  <p className="text-gray-400 text-sm">无输出内容</p>
+                )}
+              </div>
             )}
 
-            <button
-              onClick={handleSaveStatus}
-              className="px-4 py-1.5 bg-green-500 text-white text-sm rounded-md hover:bg-green-600 transition-colors"
-            >
-              保存
-            </button>
+            {step.status === 'loading' && step.id === 'deep_analysis' && (
+              <div className="p-5">
+                <div className="flex items-center gap-2 text-blue-600 text-sm mb-3">
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  深度分析中，AI 正在逐步调用工具...
+                </div>
+                {deepAnalysisStreamContent && (
+                  <div className="bg-gray-50 rounded-md p-4 max-h-[400px] overflow-y-auto">
+                    <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">
+                      {deepAnalysisStreamContent}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {step.status === 'loading' && step.id !== 'deep_analysis' && (
+              <div className="p-5 flex items-center gap-2 text-blue-600 text-sm">
+                <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                执行中...
+              </div>
+            )}
+
+            {step.status === 'pending' && (
+              <div className="p-5 text-gray-400 text-sm">等待中...</div>
+            )}
           </div>
-        </div>
+        ))}
+
+        {record.status === 'completed' && (
+          <div className="bg-green-50 rounded-lg border border-green-200 p-4 text-center text-green-700 text-sm">
+            ✅ 分析已完成
+          </div>
+        )}
+        {record.status === 'error' && record.error && (
+          <div className="bg-red-50 rounded-lg border border-red-200 p-4 text-center text-red-700 text-sm">
+            ❌ 分析失败：{record.error}
+          </div>
+        )}
       </div>
     );
   };
 
   return (
     <div className="flex-1 overflow-auto p-6 bg-gray-50">
-      {/* 子导航 */}
       <div className="mb-4 flex gap-2">
-        <button
-          onClick={() => setAnalysisView('new')}
+        <button onClick={() => { setView('new'); clearStreamContent(); }}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            analysisView === 'new'
-              ? 'bg-blue-500 text-white'
-              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
-          }`}
-        >
-          + 新建分析
-        </button>
-        <button
-          onClick={() => setAnalysisView('history')}
+            view === 'new' ? 'bg-blue-500 text-white' : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          }`}>+ 新建分析</button>
+        <button onClick={() => setView('history')}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            analysisView === 'history'
-              ? 'bg-blue-500 text-white'
-              : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
-          }`}
-        >
-          分析历史 {records.length > 0 && `(${records.length})`}
-        </button>
+            view === 'history' ? 'bg-blue-500 text-white' : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
+          }`}>分析历史 {analysisRecords.length > 0 && `(${analysisRecords.length})`}</button>
       </div>
-
-      {/* 内容区域 */}
-      {analysisView === 'new' && renderNewAnalysis()}
-      {analysisView === 'history' && renderHistory()}
-      {analysisView === 'detail' && renderDetail()}
+      {view === 'new' && renderNewAnalysis()}
+      {view === 'history' && renderHistory()}
+      {view === 'detail' && renderDetail()}
     </div>
   );
 }
 
-// 状态标签组件
-function StatusBadge({ status }: { status: AnalysisStatus }) {
-  const config: Record<AnalysisStatus, { text: string; className: string }> = {
-    analyzing: { text: '分析中', className: 'bg-blue-100 text-blue-800' },
-    completed: { text: '已完成', className: 'bg-green-100 text-green-800' },
-    unconfirmed: { text: '未确认', className: 'bg-gray-100 text-gray-800' },
-    resolved: { text: '已解决', className: 'bg-green-100 text-green-800' },
-    unresolved: { text: '未解决', className: 'bg-red-100 text-red-800' },
-  };
 
-  const { text, className } = config[status] || config.unconfirmed;
-
-  return (
-    <span className={`px-2 py-1 text-xs rounded-full ${className}`}>
-      {text}
-    </span>
-  );
-}
 
 export default Schema;

@@ -165,6 +165,9 @@ async function getDamengTables(params, onProgress, tableNamePattern, abortSignal
                 if (dataResult[j]?.hasData) {
                     hasTableData = true;
                 }
+                if (columns[j].isPrimaryKey) {
+                    columns[j].isUsed = true;
+                }
             }
             if (!filterEmptyTables || hasTableData) {
                 tables.push({

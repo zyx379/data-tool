@@ -277,6 +277,9 @@ export async function getOracleTables(
         if (dataResult[j]?.hasData && !columns[j].isPrimaryKey) {
           columns[j].isUsed = true;
         }
+        if (columns[j].isPrimaryKey) {
+          columns[j].isUsed = true;
+        }
       }
 
       if (!filterEmptyTables || hasTableData) {
@@ -322,8 +325,6 @@ async function checkColumnData(
   columns: TableColumn[],
   abortSignal?: AbortSignal
 ): Promise<{ hasData: boolean; percentage: number }[]> {
-  console.log('[checkColumnData] START:', owner, tableName, 'columns:', columns.length);
-  
   if (abortSignal?.aborted) {
     throw new Error('Operation cancelled');
   }
@@ -350,7 +351,6 @@ async function checkColumnData(
     const totalRows = rows.length;
 
     if (totalRows === 0) {
-      console.log('[checkColumnData] No rows for', owner, tableName);
       return columns.map(() => ({ hasData: false, percentage: 0 }));
     }
 
@@ -376,16 +376,27 @@ async function checkColumnData(
       });
     }
 
-    console.log('[checkColumnData] DONE:', owner, tableName, 'results:', columnResults.filter(r => r.hasData).length, 'columns with data');
     return columnResults;
   } catch (error) {
     if ((error as Error).message === 'Operation cancelled') {
       throw error;
     }
-    console.warn('[checkColumnData] ERROR:', owner, tableName, error);
     return columns.map(() => ({ hasData: false, percentage: 0 }));
   }
 }
+function serializeRowValue(value: any): any {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === 'bigint') {
+    return value.toString();
+  }
+  if (Buffer.isBuffer(value)) {
+    return value.toString('base64');
+  }
+  return value;
+}
+
 export async function executeOracleQuery(
   params: OracleConnectionParams,
   sql: string
@@ -407,7 +418,8 @@ export async function executeOracleQuery(
 
     const executionTime = Date.now() - startTime;
     const columns = (result.metaData || []).map((col: any) => col.name);
-    const rows = (result.rows || []) as any[][];
+    const rawRows = (result.rows || []) as any[][];
+    const rows = rawRows.map(row => row.map(serializeRowValue));
     const rowCount = rows.length;
 
     await connection.close();

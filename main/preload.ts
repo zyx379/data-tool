@@ -11,7 +11,21 @@ export interface AnalysisRequest {
   description: string;
   logId: string;
   projectId: string;
-  aiModel: string;
+  apiBaseUrl?: string;
+  apiToken?: string;
+  apiLogPath?: string;
+  apiTokenPath?: string;
+  apiVersionPath?: string;
+}
+
+export interface AnalysisStepData {
+  id: string;
+  status: 'pending' | 'loading' | 'completed' | 'error';
+  title: string;
+  content: string;
+  data?: any;
+  error?: string;
+  timestamp: string;
 }
 
 export interface ConversationMessage {
@@ -26,6 +40,7 @@ export interface AnalysisResult {
   success: boolean;
   message: string;
   conversation: ConversationMessage[];
+  steps?: AnalysisStepData[];
 }
 
 export interface ProjectRecord {
@@ -68,10 +83,79 @@ export interface ProjectConfigRecord {
   updatedAt: string;
 }
 
+export interface CodeRepository {
+  id: string;
+  projectId: string;
+  name: string;
+  repositoryUrl: string;
+  servicePatterns: string;
+  gitLabToken?: string;
+  defaultBranch?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ActiveProjectDetails {
   project: ProjectRecord | undefined;
   dataSource: DataSourceRecord | undefined;
   config: ProjectConfigRecord | undefined;
+}
+
+export interface RedisConfig {
+  host: string;
+  port: number;
+  password?: string;
+  db?: number;
+}
+
+export interface ModuleVersion {
+  name: string;
+  version: string;
+  updateTime?: string;
+}
+
+export interface LogQueryParam {
+  pageSize: string;
+  pageNum: string;
+  indexvalue: string;
+  logType: string;
+  serviceName?: string;
+  canary?: string;
+  traceId?: string;
+  logLevel?: string[];
+  timestamp?: {
+    startDate: string | null;
+    endDate: string | null;
+  };
+  filterParam?: {
+    searchType: string;
+    termChecked: boolean;
+    matchChecked: boolean;
+    wildcardChecked: boolean;
+    operator?: string;
+    value?: string;
+    searchValue?: string;
+  };
+}
+
+export interface AnalyzedLogInfo {
+  id: string;
+  logType: string;
+  logLevel: string;
+  serviceName: string;
+  reqUrl: string;
+  httpMethod?: string;
+  httpStatus?: string;
+  clientIp?: string;
+  operator?: string;
+  runTime?: number;
+  errorClass?: string;
+  errorMessage?: string;
+  stackTrace?: string;
+  vueFile?: string;
+  requestParams?: string;
+  tags?: Record<string, any>;
+  originalLog: any;
 }
 
 export interface ElectronAPI {
@@ -94,7 +178,42 @@ export interface ElectronAPI {
   startAnalysis: (request: AnalysisRequest) => Promise<AnalysisResult>;
   chatWithAI: (message: string, projectId: string) => Promise<AnalysisResult>;
   setGitLabConfig: (config: { baseUrl: string; token: string; defaultBranch?: string }) => Promise<{ success: boolean; message: string }>;
+  testGetCode: (params: { serviceName: string; filePath?: string; branch?: string }) => Promise<{ success: boolean; data?: any; error?: string }>;
   onAIStream: (callback: (content: string) => void) => () => void;
+  onAnalysisStepUpdate: (callback: (stepData: AnalysisStepData) => void) => () => void;
+  onAnalysisStepComplete: (callback: (stepData: AnalysisStepData) => void) => () => void;
+  onAnalysisStepError: (callback: (stepData: AnalysisStepData) => void) => () => void;
+  onAnalysisStreamChunk: (callback: (content: string) => void) => () => void;
+  testRedisConnection: (config: RedisConfig) => Promise<{ success: boolean; message: string }>;
+  getRedisTokens: (config: RedisConfig, prefix?: string) => Promise<{ success: boolean; tokens: string[]; message?: string }>;
+  getRedisFirstToken: (config: RedisConfig, prefix?: string) => Promise<{ success: boolean; token: string | null; message?: string }>;
+  getModuleVersions: (config: { 
+    baseUrl: string; 
+    versionPath?: string; 
+    token: string;
+    apiKey?: string;
+    authType?: 'bearer' | 'api-key' | 'custom';
+    customHeaderName?: string;
+  }) => Promise<{ success: boolean; modules: ModuleVersion[]; message?: string }>;
+  getLogs: (config: { 
+    baseUrl: string; 
+    logPath?: string; 
+    token: string;
+    queryParam: LogQueryParam;
+    apiKey?: string;
+    authType?: 'bearer' | 'api-key' | 'custom';
+    customHeaderName?: string;
+  }) => Promise<{ success: boolean; total: number; logs: AnalyzedLogInfo[]; message?: string }>;
+  getCodeRepositories: (projectId: string) => Promise<CodeRepository[]>;
+  getCodeRepositoryById: (id: string) => Promise<CodeRepository | undefined>;
+  createCodeRepository: (repo: Omit<CodeRepository, 'id' | 'createdAt' | 'updatedAt'>) => Promise<CodeRepository>;
+  updateCodeRepository: (id: string, updates: Partial<CodeRepository>) => Promise<CodeRepository | undefined>;
+  deleteCodeRepository: (id: string) => Promise<void>;
+  createDefaultCodeRepositories: (projectId: string) => Promise<void>;
+  matchCodeRepository: (projectId: string, serviceName: string, requestUrl?: string) => Promise<CodeRepository | undefined>;
+  inferBranchFromTag: (tag: string) => Promise<string>;
+  getGlobalConfig: () => Promise<any>;
+  saveGlobalConfig: (config: any) => Promise<any>;
   project: {
     getAll: () => Promise<ProjectRecord[]>;
     getById: (id: string) => Promise<ProjectRecord | undefined>;
@@ -136,14 +255,50 @@ const api: ElectronAPI = {
   cancelSchemaLoad: () => ipcRenderer.invoke('db:cancelSchemaLoad'),
   removeTableFromCache: (dataSourceId, tableName) => ipcRenderer.invoke('db:removeTableFromCache', dataSourceId, tableName),
   removeTablesFromCache: (dataSourceId, tableNames) => ipcRenderer.invoke('db:removeTablesFromCache', dataSourceId, tableNames),
-  startAnalysis: (request) => ipcRenderer.invoke('ai:startAnalysis', request),
+  startAnalysis: (request) => ipcRenderer.invoke('api:startAnalysis', request),
   chatWithAI: (message, projectId) => ipcRenderer.invoke('ai:chat', message, projectId),
   setGitLabConfig: (config) => ipcRenderer.invoke('ai:setGitLabConfig', config),
+  testGetCode: (params) => ipcRenderer.invoke('ai:testGetCode', params),
   onAIStream: (callback) => {
     const handler = (_: any, content: string) => callback(content);
     ipcRenderer.on('ai:stream', handler);
     return () => ipcRenderer.removeListener('ai:stream', handler);
   },
+  onAnalysisStepUpdate: (callback) => {
+    const handler = (_: any, stepData: AnalysisStepData) => callback(stepData);
+    ipcRenderer.on('analysis:stepUpdate', handler);
+    return () => ipcRenderer.removeListener('analysis:stepUpdate', handler);
+  },
+  onAnalysisStepComplete: (callback) => {
+    const handler = (_: any, stepData: AnalysisStepData) => callback(stepData);
+    ipcRenderer.on('analysis:stepComplete', handler);
+    return () => ipcRenderer.removeListener('analysis:stepComplete', handler);
+  },
+  onAnalysisStepError: (callback) => {
+    const handler = (_: any, stepData: AnalysisStepData) => callback(stepData);
+    ipcRenderer.on('analysis:stepError', handler);
+    return () => ipcRenderer.removeListener('analysis:stepError', handler);
+  },
+  onAnalysisStreamChunk: (callback) => {
+    const handler = (_: any, content: string) => callback(content);
+    ipcRenderer.on('analysis:streamChunk', handler);
+    return () => ipcRenderer.removeListener('analysis:streamChunk', handler);
+  },
+  testRedisConnection: (config) => ipcRenderer.invoke('redis:testConnection', config),
+  getRedisTokens: (config, prefix) => ipcRenderer.invoke('redis:getTokens', config, prefix),
+  getRedisFirstToken: (config, prefix) => ipcRenderer.invoke('redis:getFirstToken', config, prefix),
+  getModuleVersions: (config) => ipcRenderer.invoke('api:getModuleVersions', config),
+  getLogs: (config) => ipcRenderer.invoke('api:getLogs', config),
+  getCodeRepositories: (projectId) => ipcRenderer.invoke('db:getCodeRepositories', projectId),
+  getCodeRepositoryById: (id) => ipcRenderer.invoke('db:getCodeRepositoryById', id),
+  createCodeRepository: (repo) => ipcRenderer.invoke('db:createCodeRepository', repo),
+  updateCodeRepository: (id, updates) => ipcRenderer.invoke('db:updateCodeRepository', id, updates),
+  deleteCodeRepository: (id) => ipcRenderer.invoke('db:deleteCodeRepository', id),
+  createDefaultCodeRepositories: (projectId) => ipcRenderer.invoke('db:createDefaultCodeRepositories', projectId),
+  matchCodeRepository: (projectId, serviceName, requestUrl) => ipcRenderer.invoke('db:matchCodeRepository', projectId, serviceName, requestUrl),
+  inferBranchFromTag: (tag: string) => ipcRenderer.invoke('db:inferBranchFromTag', tag),
+  getGlobalConfig: () => ipcRenderer.invoke('db:getGlobalConfig'),
+  saveGlobalConfig: (config: any) => ipcRenderer.invoke('db:saveGlobalConfig', config),
   project: {
     getAll: () => ipcRenderer.invoke('project:getAll'),
     getById: (id) => ipcRenderer.invoke('project:getById', id),

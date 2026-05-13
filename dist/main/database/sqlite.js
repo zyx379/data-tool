@@ -39,6 +39,16 @@ exports.getProjectConfig = getProjectConfig;
 exports.createOrUpdateProjectConfig = createOrUpdateProjectConfig;
 exports.deleteProjectConfig = deleteProjectConfig;
 exports.getActiveProjectWithDetails = getActiveProjectWithDetails;
+exports.getCodeRepositoriesByProjectId = getCodeRepositoriesByProjectId;
+exports.getCodeRepositoryById = getCodeRepositoryById;
+exports.matchCodeRepository = matchCodeRepository;
+exports.createCodeRepository = createCodeRepository;
+exports.updateCodeRepository = updateCodeRepository;
+exports.deleteCodeRepository = deleteCodeRepository;
+exports.createDefaultCodeRepositories = createDefaultCodeRepositories;
+exports.inferBranchFromTag = inferBranchFromTag;
+exports.getGlobalConfig = getGlobalConfig;
+exports.createOrUpdateGlobalConfig = createOrUpdateGlobalConfig;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -221,6 +231,42 @@ async function initDatabase() {
       FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
     )
   `);
+    db.run(`
+    CREATE TABLE IF NOT EXISTS code_repositories (
+      id TEXT PRIMARY KEY,
+      projectId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      repositoryUrl TEXT NOT NULL,
+      servicePatterns TEXT NOT NULL,
+      gitLabToken TEXT,
+      defaultBranch TEXT DEFAULT 'main',
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      FOREIGN KEY (projectId) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `);
+    db.run(`
+    CREATE TABLE IF NOT EXISTS global_config (
+      id TEXT PRIMARY KEY,
+      deepseekApiKey TEXT,
+      deepseekBaseUrl TEXT,
+      deepseekModel TEXT,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL
+    )
+  `);
+    // 添加默认的代码仓库配置（用于新用户快速上手）
+    // 检查是否已有数据，避免重复添加
+    try {
+        const checkResult = db.exec('SELECT COUNT(*) as cnt FROM code_repositories');
+        if (checkResult.length > 0 && checkResult[0].values.length > 0 && checkResult[0].values[0][0] === 0) {
+            console.log('Initializing default code repositories...');
+            // 这里会在前端首次使用时添加，不在数据库初始化时添加
+        }
+    }
+    catch (e) {
+        // 忽略检查错误
+    }
     // 调试：查询现有 schema_cache
     try {
         const result = db.exec('SELECT dataSourceId, filterPattern, cachedAt FROM schema_cache ORDER BY cachedAt DESC');
@@ -723,4 +769,261 @@ function getActiveProjectWithDetails() {
     const dataSource = getDataSourceByProjectId(project.id);
     const config = getProjectConfig(project.id);
     return { project, dataSource, config };
+}
+// ==================== Code Repository Functions ====================
+function getCodeRepositoriesByProjectId(projectId) {
+    const database = getDb();
+    const results = database.exec('SELECT * FROM code_repositories WHERE projectId = ? ORDER BY name', [projectId]);
+    if (results.length === 0)
+        return [];
+    return results[0].values.map((row) => ({
+        id: row[0],
+        projectId: row[1],
+        name: row[2],
+        repositoryUrl: row[3],
+        servicePatterns: row[4],
+        gitLabToken: row[5] ? decryptPassword(row[5]) : undefined,
+        defaultBranch: row[6],
+        createdAt: row[7],
+        updatedAt: row[8],
+    }));
+}
+function getCodeRepositoryById(id) {
+    const database = getDb();
+    const stmt = database.prepare('SELECT * FROM code_repositories WHERE id = ?');
+    stmt.bind([id]);
+    if (stmt.step()) {
+        const row = stmt.get();
+        stmt.free();
+        return {
+            id: row[0],
+            projectId: row[1],
+            name: row[2],
+            repositoryUrl: row[3],
+            servicePatterns: row[4],
+            gitLabToken: row[5] ? decryptPassword(row[5]) : undefined,
+            defaultBranch: row[6],
+            createdAt: row[7],
+            updatedAt: row[8],
+        };
+    }
+    stmt.free();
+    return undefined;
+}
+function matchCodeRepository(projectId, serviceName, requestUrl) {
+    // 处理字符串 "undefined" 或 "null" 的情况
+    const cleanServiceName = (serviceName === 'undefined' || serviceName === 'null') ? '' : serviceName;
+    const repositories = getCodeRepositoriesByProjectId(projectId);
+    const searchText = `${cleanServiceName} ${requestUrl || ''}`.toLowerCase();
+    console.log('  [MATCH_REPO] Searching for:', { serviceName, cleanServiceName, requestUrl });
+    console.log('  [MATCH_REPO] Search text:', searchText);
+    if (repositories.length === 0) {
+        console.log('  ❌ [MATCH_REPO] No repositories available');
+        return undefined;
+    }
+    let bestMatch;
+    let maxMatches = 0;
+    const matchDetails = [];
+    for (const repo of repositories) {
+        const patterns = repo.servicePatterns.split(',').map(p => p.trim().toLowerCase()).filter(p => p);
+        let matchCount = 0;
+        const matchedPatterns = [];
+        for (const pattern of patterns) {
+            const forwardMatch = searchText.includes(pattern);
+            const reverseMatch = pattern.includes(searchText);
+            if (forwardMatch || reverseMatch) {
+                matchCount++;
+                matchedPatterns.push(pattern);
+            }
+        }
+        matchDetails.push({ name: repo.name, matches: matchCount, patterns: matchedPatterns });
+        if (matchCount > maxMatches) {
+            maxMatches = matchCount;
+            bestMatch = repo;
+        }
+    }
+    console.log('  [MATCH_REPO] Match results:');
+    for (const detail of matchDetails) {
+        const isBest = bestMatch && detail.name === bestMatch.name;
+        const indicator = isBest ? '⭐' : '  ';
+        console.log(`    ${indicator} ${detail.name}: ${detail.matches} matches`, detail.patterns.length > 0 ? `(patterns: ${detail.patterns.join(', ')})` : '');
+    }
+    if (bestMatch) {
+        console.log(`  ✅ [MATCH_REPO] Selected: "${bestMatch.name}" with ${maxMatches} matches`);
+    }
+    else {
+        console.log('  ❌ [MATCH_REPO] No match found');
+        console.log('  Available repositories:', repositories.map(r => ({ name: r.name, patterns: r.servicePatterns })));
+    }
+    return bestMatch;
+}
+function createCodeRepository(repo) {
+    const database = getDb();
+    const id = (0, uuid_1.v4)();
+    const now = new Date().toISOString();
+    const encryptedToken = repo.gitLabToken ? encryptPassword(repo.gitLabToken) : null;
+    database.run(`INSERT INTO code_repositories (id, projectId, name, repositoryUrl, servicePatterns, gitLabToken, defaultBranch, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, repo.projectId, repo.name, repo.repositoryUrl, repo.servicePatterns, encryptedToken, repo.defaultBranch || 'main', now, now]);
+    saveDatabase();
+    return {
+        ...repo,
+        id,
+        createdAt: now,
+        updatedAt: now,
+    };
+}
+function updateCodeRepository(id, updates) {
+    const database = getDb();
+    const existing = getCodeRepositoryById(id);
+    if (!existing)
+        return undefined;
+    const now = new Date().toISOString();
+    const updated = { ...existing, ...updates, updatedAt: now };
+    const encryptedToken = updated.gitLabToken ? encryptPassword(updated.gitLabToken) : null;
+    database.run(`UPDATE code_repositories SET name = ?, repositoryUrl = ?, servicePatterns = ?, gitLabToken = ?, defaultBranch = ?, updatedAt = ? WHERE id = ?`, [
+        updated.name,
+        updated.repositoryUrl,
+        updated.servicePatterns,
+        encryptedToken,
+        updated.defaultBranch || 'main',
+        now,
+        id,
+    ]);
+    saveDatabase();
+    return updated;
+}
+function deleteCodeRepository(id) {
+    const database = getDb();
+    database.run('DELETE FROM code_repositories WHERE id = ?', [id]);
+    saveDatabase();
+}
+function createDefaultCodeRepositories(projectId) {
+    const database = getDb();
+    const defaultRepos = [
+        {
+            name: '医嘱后端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-micro-pres-fj-common',
+            servicePatterns: 'pres-service,prescription,医嘱'
+        },
+        {
+            name: '收费后端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-micro-charge-fj-common',
+            servicePatterns: 'charge-service,收费'
+        },
+        {
+            name: '公共后端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-micro-optimus-fj-common',
+            servicePatterns: 'optimus-service,common-service,公共'
+        },
+        {
+            name: '临床路径前端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-clinicpath-fj-common',
+            servicePatterns: 'clinicpath,临床路径'
+        },
+        {
+            name: '收费前端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-his-charge-fj-common',
+            servicePatterns: 'charge-web,收费前端'
+        },
+        {
+            name: '药剂前端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-his-drug-fj-common',
+            servicePatterns: 'drug-web,药剂'
+        },
+        {
+            name: '公共前端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-his-fj-component',
+            servicePatterns: 'component-web,公共前端'
+        },
+        {
+            name: '门诊前端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-outp-fj-common',
+            servicePatterns: 'outp-web,门诊'
+        },
+        {
+            name: '医嘱前端',
+            repositoryUrl: 'http://gitlab.zoesoft.com.cn/onelink/fj-common/onelink-web-pres-fj-common',
+            servicePatterns: 'pres-web,医嘱前端'
+        }
+    ];
+    // 先获取该项目已有的仓库
+    const existingRepos = getCodeRepositoriesByProjectId(projectId);
+    const existingNames = new Set(existingRepos.map(repo => repo.name));
+    for (const repo of defaultRepos) {
+        // 只有当不存在时才添加
+        if (!existingNames.has(repo.name)) {
+            try {
+                createCodeRepository({
+                    ...repo,
+                    projectId
+                });
+            }
+            catch (e) {
+                console.error('Failed to create default repo:', repo.name, e);
+            }
+        }
+    }
+}
+function inferBranchFromTag(tag) {
+    // 特殊情况：release-0开头的都是master
+    if (tag.startsWith('release-0')) {
+        return 'master';
+    }
+    // 一般情况：例如 release-1.168.28 -> release-1.168
+    const match = tag.match(/^(release-\d+\.\d+)/);
+    if (match) {
+        return match[1];
+    }
+    // 如果无法匹配，返回master作为默认
+    return 'master';
+}
+function getGlobalConfig() {
+    const database = getDb();
+    const result = database.exec('SELECT * FROM global_config LIMIT 1');
+    if (result.length === 0 || result[0].values.length === 0) {
+        return undefined;
+    }
+    const row = result[0].values[0];
+    return {
+        id: row[0],
+        deepseekApiKey: row[1] ? decryptPassword(row[1]) : undefined,
+        deepseekBaseUrl: row[2],
+        deepseekModel: row[3],
+        createdAt: row[4],
+        updatedAt: row[5],
+    };
+}
+function createOrUpdateGlobalConfig(config) {
+    const database = getDb();
+    const now = new Date().toISOString();
+    try {
+        const existing = getGlobalConfig();
+        if (existing) {
+            const encryptedApiKey = config.deepseekApiKey ? encryptPassword(config.deepseekApiKey) : null;
+            database.run(`UPDATE global_config SET deepseekApiKey = ?, deepseekBaseUrl = ?, deepseekModel = ?, updatedAt = ? WHERE id = ?`, [encryptedApiKey, config.deepseekBaseUrl || null, config.deepseekModel || null, now, existing.id]);
+            saveDatabase();
+            return {
+                ...existing,
+                ...config,
+                updatedAt: now,
+            };
+        }
+        else {
+            const id = (0, uuid_1.v4)();
+            const encryptedApiKey = config.deepseekApiKey ? encryptPassword(config.deepseekApiKey) : null;
+            database.run(`INSERT INTO global_config (id, deepseekApiKey, deepseekBaseUrl, deepseekModel, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?)`, [id, encryptedApiKey, config.deepseekBaseUrl || null, config.deepseekModel || null, now, now]);
+            saveDatabase();
+            return {
+                id,
+                ...config,
+                createdAt: now,
+                updatedAt: now,
+            };
+        }
+    }
+    catch (error) {
+        console.error('Error creating or updating global config:', error);
+        throw error;
+    }
 }

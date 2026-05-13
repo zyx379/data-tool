@@ -9,6 +9,7 @@ export interface ToolDefinition {
 }
 
 export interface ToolCall {
+  id?: string;
   name: string;
   arguments: Record<string, any>;
 }
@@ -26,6 +27,9 @@ export interface LogInfo {
   pagePath?: string;
   errorMessage?: string;
   timestamp?: string;
+  logs?: any[];
+  errorLogs?: any[];
+  totalCount?: number;
   [key: string]: any;
 }
 
@@ -46,8 +50,13 @@ export interface QueryResult {
 export interface AnalysisRequest {
   description: string;
   logId: string;
-  dataSourceId: string;
-  aiModel: string;
+  projectId: string;
+  moduleVersions?: Array<{ name: string; version: string; updateTime?: string }>;
+  apiBaseUrl?: string;
+  apiToken?: string;
+  apiLogPath?: string;
+  apiTokenPath?: string;
+  apiVersionPath?: string;
 }
 
 export interface AnalysisResponse {
@@ -64,4 +73,60 @@ export interface ConversationMessage {
   name?: string;
 }
 
-export type ToolName = 'query_log' | 'get_code' | 'query_business_data';
+export type ToolName = 'query_log' | 'get_code' | 'query_business_data' | 'query_more_logs' | 'get_table_schema';
+
+export type AnalysisStepId =
+  | 'query_log'
+  | 'identify_service'
+  | 'match_repository'
+  | 'fetch_version_and_code'
+  | 'deep_analysis'
+  | 'conclusion';
+
+export type StepStatus = 'pending' | 'loading' | 'completed' | 'error';
+
+export interface AnalysisStepData {
+  id: AnalysisStepId;
+  status: StepStatus;
+  title: string;
+  content: string;
+  data?: any;
+  error?: string;
+  timestamp: string;
+}
+
+export interface StepCallback {
+  onStepStart: (stepId: AnalysisStepId) => void;
+  onStepUpdate: (stepData: AnalysisStepData) => void;
+  onStepComplete: (stepData: AnalysisStepData) => void;
+  onStepError: (stepId: AnalysisStepId, error: string) => void;
+  onStreamChunk: (content: string) => void;
+}
+
+export interface ServiceIdentification {
+  serviceName: string;
+  isFrontend: boolean;
+  reasoning: string;
+  suggestedDirection: 'frontend' | 'backend';
+}
+
+export interface RepositoryMatchResult {
+  matched: boolean;
+  repository?: {
+    id: string;
+    name: string;
+    repositoryUrl: string;
+    servicePatterns: string;
+    defaultBranch: string;
+  };
+  availableRepositories: Array<{ name: string }>;
+}
+
+export interface VersionAndCodeResult {
+  versionTag: string;
+  moduleName: string;
+  branch: string;
+  files: string[];
+  totalFiles: number;
+  repositoryName: string;
+}

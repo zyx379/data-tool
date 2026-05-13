@@ -35,6 +35,25 @@ export interface ProjectConfigRecord {
     createdAt: string;
     updatedAt: string;
 }
+export interface CodeRepositoryRecord {
+    id: string;
+    projectId: string;
+    name: string;
+    repositoryUrl: string;
+    servicePatterns: string;
+    gitLabToken?: string;
+    defaultBranch?: string;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface GlobalConfigRecord {
+    id: string;
+    deepseekApiKey?: string;
+    deepseekBaseUrl?: string;
+    deepseekModel?: string;
+    createdAt: string;
+    updatedAt: string;
+}
 export declare function initDatabase(): Promise<void>;
 export declare function closeDatabase(): void;
 export declare function encryptPassword(password: string): string;
@@ -82,3 +101,13 @@ export declare function getActiveProjectWithDetails(): {
     dataSource: DataSourceRecord | undefined;
     config: ProjectConfigRecord | undefined;
 };
+export declare function getCodeRepositoriesByProjectId(projectId: string): CodeRepositoryRecord[];
+export declare function getCodeRepositoryById(id: string): CodeRepositoryRecord | undefined;
+export declare function matchCodeRepository(projectId: string, serviceName: string, requestUrl?: string): CodeRepositoryRecord | undefined;
+export declare function createCodeRepository(repo: Omit<CodeRepositoryRecord, 'id' | 'createdAt' | 'updatedAt'>): CodeRepositoryRecord;
+export declare function updateCodeRepository(id: string, updates: Partial<CodeRepositoryRecord>): CodeRepositoryRecord | undefined;
+export declare function deleteCodeRepository(id: string): void;
+export declare function createDefaultCodeRepositories(projectId: string): void;
+export declare function inferBranchFromTag(tag: string): string;
+export declare function getGlobalConfig(): GlobalConfigRecord | undefined;
+export declare function createOrUpdateGlobalConfig(config: Omit<GlobalConfigRecord, 'id' | 'createdAt' | 'updatedAt'>): GlobalConfigRecord;
