@@ -49,11 +49,25 @@ import {
 import { getOracleTables, executeOracleQuery, testOracleConnection } from '../database/oracle';
 import { getDamengTables, executeDamengQuery, testDamengConnection } from '../database/dameng';
 import { testRedisConnection, getTokensFromRedis, getFirstTokenFromRedis } from '../redis';
+import { updateGitLabConfig } from '../agent/tools/gitLab';
 
 let currentAbortController: AbortController | null = null;
 const chatSessions = new Map<string, ChatSession>();
 
 export function registerIpcHandlers() {
+  // 启动时从全局配置初始化 GitLab 配置
+  try {
+    const globalConfig = getGlobalConfig();
+    if (globalConfig) {
+      updateGitLabConfig({
+        baseUrl: globalConfig.gitLabBaseUrl,
+        token: globalConfig.gitLabToken,
+      });
+    }
+  } catch (e) {
+    console.error('Failed to initialize GitLab config from global config:', e);
+  }
+
   ipcMain.handle('api:startAnalysis', async (_event, request: AnalysisRequest) => {
     try {
       const agent = createAgent();
@@ -157,7 +171,13 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('db:saveGlobalConfig', async (_event, config: any) => {
     try {
-      return createOrUpdateGlobalConfig(config);
+      const result = createOrUpdateGlobalConfig(config);
+      // 同步更新内存中的 GitLab 配置
+      updateGitLabConfig({
+        baseUrl: config.gitLabBaseUrl,
+        token: config.gitLabToken,
+      });
+      return result;
     } catch (error) {
       console.error('Error saving global config:', error);
       throw error;
@@ -744,6 +764,7 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('ai:setGitLabConfig', async (_event, config: any) => {
     try {
+      updateGitLabConfig(config);
       return { success: true };
     } catch (error) {
       console.error('Error setting GitLab config:', error);
@@ -790,15 +811,20 @@ export function registerIpcHandlers() {
 
   ipcMain.handle('redis:getFirstToken', async (_event, config: any, prefix: string) => {
     try {
-      return await getFirstTokenFromRedis({
+      const token = await getFirstTokenFromRedis({
         host: config.host,
         port: config.port,
         password: config.password,
         db: config.db || 0,
       }, prefix);
+      if (token) {
+        return { success: true, token };
+      } else {
+        return { success: false, token: null, message: '未找到 Token' };
+      }
     } catch (error) {
       console.error('Error getting first Redis token:', error);
-      throw error;
+      return { success: false, token: null, message: (error as Error).message };
     }
   });
 

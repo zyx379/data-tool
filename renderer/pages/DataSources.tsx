@@ -33,6 +33,8 @@ function DataSources() {
     deepseekApiKey: '',
     deepseekBaseUrl: 'https://api.deepseek.com/v1',
     deepseekModel: 'deepseek-chat',
+    gitLabBaseUrl: 'http://gitlab.zoesoft.com.cn',
+    gitLabToken: '',
   });
   const [aiConfigSaving, setAiConfigSaving] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -142,6 +144,8 @@ function DataSources() {
             deepseekApiKey: config.deepseekApiKey || '',
             deepseekBaseUrl: config.deepseekBaseUrl || 'https://api.deepseek.com/v1',
             deepseekModel: config.deepseekModel || 'deepseek-chat',
+            gitLabBaseUrl: config.gitLabBaseUrl || 'http://gitlab.zoesoft.com.cn',
+            gitLabToken: config.gitLabToken || '',
           });
         }
       } catch (error) {
@@ -442,7 +446,7 @@ function DataSources() {
             activeTab === 'ai-config' ? 'bg-white text-blue-600 shadow' : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          AI 配置
+          全局配置
         </button>
       </div>
 
@@ -859,49 +863,87 @@ function DataSources() {
 
       {activeTab === 'ai-config' && (
         <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-6">DeepSeek API 配置</h3>
+          <h3 className="text-lg font-semibold mb-6">全局配置</h3>
           
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
-                <input
-                  type="password"
-                  value={aiConfigForm.deepseekApiKey}
-                  onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekApiKey: e.target.value })}
-                  placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
-                <input
-                  type="text"
-                  value={aiConfigForm.deepseekBaseUrl}
-                  onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekBaseUrl: e.target.value })}
-                  placeholder="https://api.deepseek.com/v1"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-                <input
-                  type="text"
-                  value={aiConfigForm.deepseekModel}
-                  onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekModel: e.target.value })}
-                  placeholder="deepseek-chat / deepseek-coder"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+          <div className="space-y-8">
+            {/* DeepSeek 配置区域 */}
+            <div>
+              <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-blue-400" />
+                DeepSeek
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                  <input
+                    type="password"
+                    value={aiConfigForm.deepseekApiKey}
+                    onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekApiKey: e.target.value })}
+                    placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                  <input
+                    type="text"
+                    value={aiConfigForm.deepseekBaseUrl}
+                    onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekBaseUrl: e.target.value })}
+                    placeholder="https://api.deepseek.com/v1"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                  <input
+                    type="text"
+                    value={aiConfigForm.deepseekModel}
+                    onChange={(e) => setAiConfigForm({ ...aiConfigForm, deepseekModel: e.target.value })}
+                    placeholder="deepseek-chat / deepseek-coder"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
               </div>
             </div>
-            
+
+            {/* GitLab 配置区域 */}
+            <div>
+              <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-orange-400" />
+                GitLab
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Base URL</label>
+                  <input
+                    type="text"
+                    value={aiConfigForm.gitLabBaseUrl}
+                    onChange={(e) => setAiConfigForm({ ...aiConfigForm, gitLabBaseUrl: e.target.value })}
+                    placeholder="http://gitlab.zoesoft.com.cn"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Token（全局回退）</label>
+                  <input
+                    type="password"
+                    value={aiConfigForm.gitLabToken}
+                    onChange={(e) => setAiConfigForm({ ...aiConfigForm, gitLabToken: e.target.value })}
+                    placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <p className="mt-1 text-xs text-gray-400">仓库级 Token 优先，此处作全局回退</p>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <div className="text-sm text-blue-800">
                 <p className="font-medium mb-1">提示：</p>
                 <ul className="list-disc pl-5 space-y-1">
-                  <li>请确保您的 DeepSeek API Key 有足够的余额</li>
-                  <li>如果 API Key 失效，请重新生成并更新</li>
-                  <li>配置会保存在本地，不用担心数据泄露</li>
+                  <li>所有密钥均加密存储在本地，不会上传</li>
+                  <li>DeepSeek API Key 请确保有足够余额</li>
+                  <li>GitLab Token 可在用户设置 → Access Tokens 中生成</li>
                 </ul>
               </div>
             </div>

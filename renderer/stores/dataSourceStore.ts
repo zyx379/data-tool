@@ -457,7 +457,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       },
     }),
     {
-      name: 'zoehis-helper-storage',
+      name: 'zoe-devops-storage',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         filterRules: state.filterRules,

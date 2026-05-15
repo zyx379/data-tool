@@ -8,9 +8,23 @@ const sqlite_1 = require("../database/sqlite");
 const oracle_1 = require("../database/oracle");
 const dameng_1 = require("../database/dameng");
 const redis_1 = require("../redis");
+const gitLab_1 = require("../agent/tools/gitLab");
 let currentAbortController = null;
 const chatSessions = new Map();
 function registerIpcHandlers() {
+    // 启动时从全局配置初始化 GitLab 配置
+    try {
+        const globalConfig = (0, sqlite_1.getGlobalConfig)();
+        if (globalConfig) {
+            (0, gitLab_1.updateGitLabConfig)({
+                baseUrl: globalConfig.gitLabBaseUrl,
+                token: globalConfig.gitLabToken,
+            });
+        }
+    }
+    catch (e) {
+        console.error('Failed to initialize GitLab config from global config:', e);
+    }
     electron_1.ipcMain.handle('api:startAnalysis', async (_event, request) => {
         try {
             const agent = (0, agent_1.createAgent)();
@@ -107,7 +121,13 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle('db:saveGlobalConfig', async (_event, config) => {
         try {
-            return (0, sqlite_1.createOrUpdateGlobalConfig)(config);
+            const result = (0, sqlite_1.createOrUpdateGlobalConfig)(config);
+            // 同步更新内存中的 GitLab 配置
+            (0, gitLab_1.updateGitLabConfig)({
+                baseUrl: config.gitLabBaseUrl,
+                token: config.gitLabToken,
+            });
+            return result;
         }
         catch (error) {
             console.error('Error saving global config:', error);
@@ -644,6 +664,7 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle('ai:setGitLabConfig', async (_event, config) => {
         try {
+            (0, gitLab_1.updateGitLabConfig)(config);
             return { success: true };
         }
         catch (error) {
@@ -690,16 +711,22 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle('redis:getFirstToken', async (_event, config, prefix) => {
         try {
-            return await (0, redis_1.getFirstTokenFromRedis)({
+            const token = await (0, redis_1.getFirstTokenFromRedis)({
                 host: config.host,
                 port: config.port,
                 password: config.password,
                 db: config.db || 0,
             }, prefix);
+            if (token) {
+                return { success: true, token };
+            }
+            else {
+                return { success: false, token: null, message: '未找到 Token' };
+            }
         }
         catch (error) {
             console.error('Error getting first Redis token:', error);
-            throw error;
+            return { success: false, token: null, message: error.message };
         }
     });
     electron_1.ipcMain.handle('api:getModuleVersions', async (_event, config) => {

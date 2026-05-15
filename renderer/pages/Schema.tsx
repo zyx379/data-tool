@@ -123,6 +123,8 @@ function Schema() {
   const [queryDropdownOpen, setQueryDropdownOpen] = useState<Record<string, boolean>>({});
   const [sortDropdownOpen, setSortDropdownOpen] = useState<Record<string, boolean>>({});
   const valueInputRef = useRef<Record<string, HTMLInputElement | null>>({});
+  const queryScrollRef = useRef<HTMLDivElement>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
   const [ownerContextMenu, setOwnerContextMenu] = useState<{ x: number; y: number; owner: string } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'table' | 'owner'; name: string; tableNames?: string[] } | null>(null);
@@ -1153,7 +1155,11 @@ function Schema() {
                 )}
 
                 {activeSubTab === 'query' && (
-                  <div className="relative grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_minmax(12rem,1fr)] overflow-hidden">
+                  <div
+                    className="relative flex flex-1 flex-col overflow-y-auto"
+                    ref={queryScrollRef}
+                    onScroll={(e) => setShowBackToTop(e.currentTarget.scrollTop > 200)}
+                  >
                     <div className="border-b border-slate-200 bg-gradient-to-br from-slate-50 to-white px-4 py-3">
                       <div className="flex flex-wrap items-center gap-4">
                           <label className="flex items-center space-x-2 cursor-pointer whitespace-nowrap">
@@ -1198,8 +1204,8 @@ function Schema() {
                       </div>
                     </div>
 
-                    <div className="flex min-h-0 flex-col gap-3 overflow-hidden px-4 py-3 md:flex-row md:items-stretch md:gap-4">
-                        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[63%] md:flex-none">
+                    <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-start md:gap-4">
+                        <div className="flex w-full min-w-0 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[63%] md:flex-none">
                           <div className="flex flex-shrink-0 flex-col gap-2 border-b border-slate-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="min-w-0">
                               <span className="text-xs font-semibold text-slate-700">查询条件</span>
@@ -1282,7 +1288,7 @@ function Schema() {
                             </div>
                           </div>
 
-                          <div className="min-h-0 max-h-[min(16rem,42vh)] flex-1 overflow-x-auto overflow-y-auto px-3 py-3 md:max-h-none">
+                          <div className="overflow-x-auto px-3 py-3">
                             {(queryConditions[activeTable.tableName] || []).length === 0 ? (
                               <p className="py-8 text-center text-xs text-slate-400">暂无条件，使用上方「添加字段」从已标记列中选择</p>
                             ) : (
@@ -1389,14 +1395,14 @@ function Schema() {
 
                         <div className="hidden w-px shrink-0 self-stretch bg-slate-200 md:block" aria-hidden />
 
-                        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[37%] md:flex-none">
+                        <div className="flex w-full min-w-0 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[37%] md:flex-none">
                           <div className="flex-shrink-0 border-b border-slate-200 px-3 py-2">
                             <span className="text-xs font-semibold text-slate-700">排序条件</span>
                             <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
                               拖拽 ⋮⋮ 调整顺序；点击箭头切换升序 / 降序。
                             </p>
                           </div>
-                          <div className="min-h-0 max-h-[min(16rem,42vh)] flex-1 overflow-x-auto overflow-y-auto px-3 py-3 md:max-h-none">
+                          <div className="overflow-x-auto px-3 py-3">
                             <div className="flex flex-wrap items-center gap-2">
                               {(sortConditions[activeTable.tableName] || []).map((sort, index) => {
                                 const column = activeTable.tableInfo.columns.find(c => c.columnName === sort.columnName);
@@ -1514,13 +1520,13 @@ function Schema() {
                         </div>
                     </div>
 
-                    <div className="flex min-h-0 flex-col overflow-hidden border-t border-slate-200 bg-white">
+                    <div className="flex min-h-[20rem] flex-col border-t border-slate-200 bg-white">
                       {queryResults[activeTable.tableName] ? (
                         (() => {
                           const results = queryResults[activeTable.tableName];
                           if (!results) return null;
                           return (
-                        <div className="h-full flex flex-col">
+                        <div className="flex flex-col">
                           <div className="p-3 border-b border-slate-200 bg-gray-50 flex-shrink-0">
                             <h4 className="font-semibold text-gray-700 text-sm">
                               查询结果 ({results.rows.length} 条)
@@ -1529,7 +1535,7 @@ function Schema() {
                               </span>
                             </h4>
                           </div>
-                          <div className="flex-1 overflow-auto">
+                          <div className="overflow-x-auto">
                             <table className="min-w-full">
                               <thead className="bg-gray-100 sticky top-0 z-10">
                                 <tr>
@@ -1568,7 +1574,7 @@ function Schema() {
                           );
                         })()
                       ) : (
-                        <div className="h-full flex items-center justify-center text-gray-400">
+                        <div className="flex min-h-[20rem] items-center justify-center text-gray-400">
                           <div className="text-center">
                             <svg className="w-16 h-16 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
@@ -1578,6 +1584,21 @@ function Schema() {
                         </div>
                       )}
                     </div>
+
+                    {showBackToTop && (
+                      <div className="sticky bottom-4 flex justify-end px-4 pb-2">
+                        <button
+                          type="button"
+                          onClick={() => queryScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+                          className="flex items-center gap-1.5 rounded-full bg-blue-500/85 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-sm transition-all hover:bg-blue-600"
+                        >
+                          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
+                          </svg>
+                          回到顶部
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

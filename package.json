@@ -1,5 +1,5 @@
 {
-  "name": "zoehis-helper",
+  "name": "zoe-devops",
   "version": "1.0.0",
   "description": "数据查询 + AI 报表工具（支持 Oracle/达梦）",
   "main": "dist/main/index.js",
@@ -48,8 +48,8 @@
     "vite": "^5.1.4"
   },
   "build": {
-    "appId": "com.zoehis.helper",
-    "productName": "zoehis-helper",
+    "appId": "com.zoe.devops",
+    "productName": "ZoeDevOps",
     "directories": {
       "output": "release"
     },

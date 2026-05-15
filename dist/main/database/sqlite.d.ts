@@ -51,6 +51,8 @@ export interface GlobalConfigRecord {
     deepseekApiKey?: string;
     deepseekBaseUrl?: string;
     deepseekModel?: string;
+    gitLabBaseUrl?: string;
+    gitLabToken?: string;
     createdAt: string;
     updatedAt: string;
 }

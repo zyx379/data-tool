@@ -57,7 +57,8 @@ const crypto_js_1 = __importDefault(require("crypto-js"));
 const uuid_1 = require("uuid");
 const schemaCacheFiles_1 = require("./schemaCacheFiles");
 const schemaMerge_1 = require("./schemaMerge");
-const ENCRYPTION_KEY = 'zoehis-helper-encryption-key-v1';
+const ENCRYPTION_KEY = 'zoe-devops-encryption-key-v1';
+const OLD_ENCRYPTION_KEY = 'zoehis-helper-encryption-key-v1';
 let db = null;
 let dbPath = '';
 function saveDatabase() {
@@ -110,11 +111,82 @@ function migrateSchemaCacheFromSqliteToFiles() {
         console.error('[schema-cache] SQLite migration failed:', e);
     }
 }
+/** 将用旧密钥加密的密码字段迁移为新密钥加密 */
+function migrateEncryptionKeys() {
+    if (!db)
+        return;
+    try {
+        // 迁移 data_sources.password
+        const dsRows = db.exec('SELECT id, password FROM data_sources WHERE password IS NOT NULL AND password != \'\'');
+        if (dsRows.length > 0) {
+            for (const row of dsRows[0].values) {
+                const [id, encPwd] = row;
+                try {
+                    const plain = crypto_js_1.default.AES.decrypt(encPwd, OLD_ENCRYPTION_KEY).toString(crypto_js_1.default.enc.Utf8);
+                    if (plain) {
+                        const newEnc = crypto_js_1.default.AES.encrypt(plain, ENCRYPTION_KEY).toString();
+                        db.run('UPDATE data_sources SET password = ? WHERE id = ?', [newEnc, id]);
+                    }
+                }
+                catch {
+                    /* 解密失败，跳过（可能已是新密钥加密） */
+                }
+            }
+        }
+        // 迁移 global_config.deepseekApiKey
+        const gcRows = db.exec('SELECT id, deepseekApiKey FROM global_config WHERE deepseekApiKey IS NOT NULL AND deepseekApiKey != \'\'');
+        if (gcRows.length > 0) {
+            for (const row of gcRows[0].values) {
+                const [id, encKey] = row;
+                try {
+                    const plain = crypto_js_1.default.AES.decrypt(encKey, OLD_ENCRYPTION_KEY).toString(crypto_js_1.default.enc.Utf8);
+                    if (plain) {
+                        const newEnc = crypto_js_1.default.AES.encrypt(plain, ENCRYPTION_KEY).toString();
+                        db.run('UPDATE global_config SET deepseekApiKey = ? WHERE id = ?', [newEnc, id]);
+                    }
+                }
+                catch {
+                    /* 跳过 */
+                }
+            }
+        }
+        // 迁移 code_repositories.gitLabToken
+        const repoRows = db.exec('SELECT id, gitLabToken FROM code_repositories WHERE gitLabToken IS NOT NULL AND gitLabToken != \'\'');
+        if (repoRows.length > 0) {
+            for (const row of repoRows[0].values) {
+                const [id, encTok] = row;
+                try {
+                    const plain = crypto_js_1.default.AES.decrypt(encTok, OLD_ENCRYPTION_KEY).toString(crypto_js_1.default.enc.Utf8);
+                    if (plain) {
+                        const newEnc = crypto_js_1.default.AES.encrypt(plain, ENCRYPTION_KEY).toString();
+                        db.run('UPDATE code_repositories SET gitLabToken = ? WHERE id = ?', [newEnc, id]);
+                    }
+                }
+                catch {
+                    /* 跳过 */
+                }
+            }
+        }
+        saveDatabase();
+        console.log('Encryption key migration completed');
+    }
+    catch (e) {
+        console.error('Encryption key migration failed:', e);
+    }
+}
 async function initDatabase() {
     console.log('Initializing database...');
     const userDataPath = electron_1.app.getPath('userData');
-    dbPath = path_1.default.join(userDataPath, 'zoehis-helper.db');
+    const oldDbPath = path_1.default.join(userDataPath, 'zoehis-helper.db');
+    dbPath = path_1.default.join(userDataPath, 'zoe-devops.db');
     console.log('Database path:', dbPath);
+    // 迁移旧数据库文件
+    let needsEncryptionMigration = false;
+    if (!fs_1.default.existsSync(dbPath) && fs_1.default.existsSync(oldDbPath)) {
+        fs_1.default.renameSync(oldDbPath, dbPath);
+        console.log('Migrated database file from zoehis-helper.db to zoe-devops.db');
+        needsEncryptionMigration = true;
+    }
     const SQL = await (0, sql_js_1.default)();
     if (fs_1.default.existsSync(dbPath)) {
         try {
@@ -295,6 +367,15 @@ async function initDatabase() {
       updatedAt TEXT NOT NULL
     )
   `);
+    // 迁移 global_config 表：添加 GitLab 字段（若不存在）
+    try {
+        db.run('ALTER TABLE global_config ADD COLUMN gitLabBaseUrl TEXT');
+    }
+    catch { /* 已存在则跳过 */ }
+    try {
+        db.run('ALTER TABLE global_config ADD COLUMN gitLabToken TEXT');
+    }
+    catch { /* 已存在则跳过 */ }
     // 添加默认的代码仓库配置（用于新用户快速上手）
     // 检查是否已有数据，避免重复添加
     try {
@@ -306,6 +387,9 @@ async function initDatabase() {
     }
     catch (e) {
         // 忽略检查错误
+    }
+    if (needsEncryptionMigration) {
+        migrateEncryptionKeys();
     }
     (0, schemaCacheFiles_1.ensureSchemaCacheDir)();
     migrateSchemaCacheFromSqliteToFiles();
@@ -1000,7 +1084,7 @@ function inferBranchFromTag(tag) {
 }
 function getGlobalConfig() {
     const database = getDb();
-    const result = database.exec('SELECT * FROM global_config LIMIT 1');
+    const result = database.exec('SELECT id, deepseekApiKey, deepseekBaseUrl, deepseekModel, createdAt, updatedAt, gitLabBaseUrl, gitLabToken FROM global_config LIMIT 1');
     if (result.length === 0 || result[0].values.length === 0) {
         return undefined;
     }
@@ -1012,6 +1096,8 @@ function getGlobalConfig() {
         deepseekModel: row[3],
         createdAt: row[4],
         updatedAt: row[5],
+        gitLabBaseUrl: row[6],
+        gitLabToken: row[7] ? decryptPassword(row[7]) : undefined,
     };
 }
 function createOrUpdateGlobalConfig(config) {
@@ -1021,7 +1107,8 @@ function createOrUpdateGlobalConfig(config) {
         const existing = getGlobalConfig();
         if (existing) {
             const encryptedApiKey = config.deepseekApiKey ? encryptPassword(config.deepseekApiKey) : null;
-            database.run(`UPDATE global_config SET deepseekApiKey = ?, deepseekBaseUrl = ?, deepseekModel = ?, updatedAt = ? WHERE id = ?`, [encryptedApiKey, config.deepseekBaseUrl || null, config.deepseekModel || null, now, existing.id]);
+            const encryptedGitLabToken = config.gitLabToken ? encryptPassword(config.gitLabToken) : null;
+            database.run(`UPDATE global_config SET deepseekApiKey = ?, deepseekBaseUrl = ?, deepseekModel = ?, gitLabBaseUrl = ?, gitLabToken = ?, updatedAt = ? WHERE id = ?`, [encryptedApiKey, config.deepseekBaseUrl || null, config.deepseekModel || null, config.gitLabBaseUrl || null, encryptedGitLabToken, now, existing.id]);
             saveDatabase();
             return {
                 ...existing,
@@ -1032,8 +1119,9 @@ function createOrUpdateGlobalConfig(config) {
         else {
             const id = (0, uuid_1.v4)();
             const encryptedApiKey = config.deepseekApiKey ? encryptPassword(config.deepseekApiKey) : null;
-            database.run(`INSERT INTO global_config (id, deepseekApiKey, deepseekBaseUrl, deepseekModel, createdAt, updatedAt)
-         VALUES (?, ?, ?, ?, ?, ?)`, [id, encryptedApiKey, config.deepseekBaseUrl || null, config.deepseekModel || null, now, now]);
+            const encryptedGitLabToken = config.gitLabToken ? encryptPassword(config.gitLabToken) : null;
+            database.run(`INSERT INTO global_config (id, deepseekApiKey, deepseekBaseUrl, deepseekModel, gitLabBaseUrl, gitLabToken, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [id, encryptedApiKey, config.deepseekBaseUrl || null, config.deepseekModel || null, config.gitLabBaseUrl || null, encryptedGitLabToken, now, now]);
             saveDatabase();
             return {
                 id,

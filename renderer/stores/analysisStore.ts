@@ -194,7 +194,7 @@ export const useAnalysisStore = create<AnalysisState>()(
       },
     }),
     {
-      name: 'zoehis-analysis-store',
+      name: 'zoe-devops-analysis-store',
       partialize: (state) => ({
         analysisRecords: state.analysisRecords.filter((r) => r.status !== 'analyzing'),
         formDescription: state.formDescription,

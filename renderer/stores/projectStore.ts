@@ -249,7 +249,7 @@ export const useProjectStore = create<ProjectStore>()(
       },
     }),
     {
-      name: 'zoehis-project-store',
+      name: 'zoe-devops-project-store',
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         activeProject: state.activeProject,

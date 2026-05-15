@@ -60,7 +60,7 @@ function createMenu() {
             dialog.showMessageBox({
               type: 'info',
               title: '关于',
-              message: 'zoehis-helper v1.0'
+              message: 'ZoeDevOps v1.0'
             });
           }
         }
@@ -80,7 +80,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 1024,
     minHeight: 768,
-    title: 'zoehis-helper',
+    title: 'ZoeDevOps',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
