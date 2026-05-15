@@ -1,0 +1,41 @@
+示例1 日志ID：1442a6fd28f94563
+1、查询http日志 indexvalue: "log-http*"
+tags.http.header中referer\":\"http://192.168.5.24:8081/pres-web/presManage/westernPrescribe...
+推测前端——pres-web医嘱前端westernPrescribe.vue文件
+后端——pres-service医嘱后端PrescribeServiceImpl.java:11091
+检测版本——release-0.0.1496.fj-common——master分支
+推荐后端方向
+getcode获取关键代码
+// 查找到医嘱中出院嘱托性医嘱的数量
+        Integer index = this.clinicControlFlowConfigInnerClient.checkPresControl1(controlMode, controlCodeList).getData();
+        if (index > 0) {
+            // 存在出院控制医嘱
+            List<PrescribeRecord> outHospital = this.dao.getOutHospital(prescribeRecords.get(0).getEventNo());
+            if (!outHospital.isEmpty()) {
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                Date beginExecTime = outHospital.get(0).getBeginExecTime();
+                throw ApiException.createEx(PresExceptionCodeEnum.ALREADY_DISCHARGE_PRES,
+                        sdf.format(beginExecTime), outHospital.get(0).getItemName());
+            }
+代码分析：本次保存存在出院控制医嘱checkPresControl1并且历史记录也存在出院医嘱getOutHospital
+查询sql日志 关键入参 traceId: "1442a6fd28f94563" indexvalue: "log-sql*" logType: "sql" filterParamet:{sqlId: "getOutHospital"}
+关键出参：
+返回行数：resultCount: "1"
+sql:
+select p.*
+from ZOEPRES.PRES_INP_PRES_RECORD p
+where 1 = 1
+	and p.EVENT_NO = '20254482001'
+	and p.PRES_STATUS_CODE in ('2', '4', '5', '6')
+	and exists (
+		select 1
+		from ZOEDICT.DIC_CLINIC_CONTROL_FLOW_CONFIG dc
+		where 1 = 1
+			and dc.CONTROL_MODE = '0001'
+			and dc.CONTROL_CODE = p.ITEM_CODE
+	)
+调用查数据工具返回查询结果
+
+
+
+

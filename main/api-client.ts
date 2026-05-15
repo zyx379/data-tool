@@ -62,6 +62,17 @@ export interface AnalyzedLogInfo {
   requestParams?: string;
   tags?: Record<string, any>;
   originalLog: any;
+  sqlId?: string;
+  sqlContent?: string;
+  duration?: string;
+  resultCount?: string;
+  tableName?: string;
+  timestamp?: string;
+  sql?: string;
+  statement?: string;
+  query?: string;
+  params?: string;
+  bindParams?: string;
 }
 
 export class ApiClient {
@@ -316,8 +327,39 @@ export class ApiClient {
     }
 
     // 请求参数
-    if (log.requestParam) {
-      result.requestParams = log.requestParam;
+    result.requestParams = log.requestParam || log.requestParams || log.params || log.bindParams || '';
+
+    // SQL日志属性
+    if (log.sqlId) {
+      result.sqlId = log.sqlId;
+    }
+    result.sqlContent = log.sqlContent || log.sql || log.statement || log.query || log.sqlStr || '';
+    if (log.duration) {
+      result.duration = log.duration;
+    }
+    if (log.resultCount) {
+      result.resultCount = log.resultCount;
+    }
+    if (log.tableName) {
+      result.tableName = log.tableName;
+    }
+    if (log.timestamp) {
+      result.timestamp = log.timestamp;
+    }
+    if (log.sql) {
+      result.sql = log.sql;
+    }
+    if (log.statement) {
+      result.statement = log.statement;
+    }
+    if (log.query) {
+      result.query = log.query;
+    }
+    if (log.params) {
+      result.params = log.params;
+    }
+    if (log.bindParams) {
+      result.bindParams = log.bindParams;
     }
 
     return result;

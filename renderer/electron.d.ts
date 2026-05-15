@@ -3,6 +3,7 @@ export interface SchemaProgress {
   total: number;
   currentTable: string;
   phase: 'loading' | 'processing' | 'complete' | 'error';
+  detail?: string;
 }
 
 export interface RedisConfig {
@@ -109,7 +110,7 @@ export interface ElectronAPI {
   testConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
   getQueryHistory: () => Promise<any[]>;
   clearQueryHistory: () => Promise<void>;
-  getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean, filterEmptyTables?: boolean) => Promise<any[]>;
+  getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean, filterEmptyTables?: boolean, mergeWithExistingCache?: boolean, filterNoCommentTables?: boolean) => Promise<any[]>;
   getSchemaFromCache: (dataSourceId: string) => Promise<any[]>;
   executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
   onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;

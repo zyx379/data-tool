@@ -11,7 +11,7 @@ const api = {
     testConnection: (ds) => electron_1.ipcRenderer.invoke('db:testConnection', ds),
     getQueryHistory: () => electron_1.ipcRenderer.invoke('db:getQueryHistory'),
     clearQueryHistory: () => electron_1.ipcRenderer.invoke('db:clearQueryHistory'),
-    getSchema: (dataSourceId, ownerFilter, tableNamePattern, useCache = true, filterEmptyTables = false) => electron_1.ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern, useCache, filterEmptyTables),
+    getSchema: (dataSourceId, ownerFilter, tableNamePattern, useCache = true, filterEmptyTables = false, mergeWithExistingCache = false, filterNoCommentTables = true) => electron_1.ipcRenderer.invoke('db:getSchema', dataSourceId, ownerFilter, tableNamePattern, useCache, filterEmptyTables, mergeWithExistingCache, filterNoCommentTables),
     getSchemaFromCache: (dataSourceId) => electron_1.ipcRenderer.invoke('db:getSchemaFromCache', dataSourceId),
     executeQuery: (dataSourceId, sql) => electron_1.ipcRenderer.invoke('db:executeQuery', dataSourceId, sql),
     onSchemaProgress: (callback) => {
@@ -50,6 +50,12 @@ const api = {
         const handler = (_, content) => callback(content);
         electron_1.ipcRenderer.on('analysis:streamChunk', handler);
         return () => electron_1.ipcRenderer.removeListener('analysis:streamChunk', handler);
+    },
+    sendChatMessage: (projectId, message) => electron_1.ipcRenderer.invoke('chat:sendMessage', projectId, message),
+    onChatStreamChunk: (callback) => {
+        const handler = (_, data) => callback(data);
+        electron_1.ipcRenderer.on('chat:streamChunk', handler);
+        return () => electron_1.ipcRenderer.removeListener('chat:streamChunk', handler);
     },
     testRedisConnection: (config) => electron_1.ipcRenderer.invoke('redis:testConnection', config),
     getRedisTokens: (config, prefix) => electron_1.ipcRenderer.invoke('redis:getTokens', config, prefix),

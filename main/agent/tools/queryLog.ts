@@ -109,7 +109,7 @@ export function buildLogQueryPrompt(args: { logId: string }, data: any): string 
   const errorCount = data.errorCount || errorLogs.length;
 
   let prompt = `## 日志查询结果\n\n`;
-  prompt += `**日志ID**: ${args.logId}\n`;
+  prompt += `**日志ID（即 TraceId）**: \`${args.logId}\` ← 查询 SQL 日志和追踪调用链时，将此值作为 traceId 参数\n`;
   prompt += `**总日志数**: ${totalCount}\n`;
   prompt += `**异常日志数 (ERROR/WARN)**: ${errorCount}\n\n`;
 
@@ -159,6 +159,9 @@ export function buildSimpleLogDisplay(data: any): string {
   const errorCount = data.errorCount || errorLogs.length;
 
   let display = `共找到 ${totalCount} 条日志`;
+  if (data.logId) {
+    display += `\n**TraceId**: \`${data.logId}\`（查询 SQL 日志时使用此值）`;
+  }
 
   if (errorCount === 0) {
     display += `，未发现异常日志（ERROR/WARN）。`;

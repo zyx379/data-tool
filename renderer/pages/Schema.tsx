@@ -21,6 +21,7 @@ interface QueryConditionRow extends QueryCondition {
 }
 
 interface SortCondition {
+  id: string;
   columnName: string;
   order: 'ASC' | 'DESC';
 }
@@ -299,6 +300,8 @@ function Schema() {
     setSchemaProgress,
     filterEmptyTables,
     setFilterEmptyTables,
+    filterNoCommentTables,
+    setFilterNoCommentTables,
     toggleFieldUsed,
     getUsedFields,
     setShowOnlyUsedFieldsByTable,
@@ -481,10 +484,22 @@ function Schema() {
     const currentConditions = sortConditions[tableName] || [];
     setSortConditions({
       ...sortConditions,
-      [tableName]: [...currentConditions, { columnName, order: 'DESC' }]
+      [tableName]: [
+        ...currentConditions,
+        { id: `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`, columnName, order: 'DESC' },
+      ],
     });
     // 关闭排序条件下拉
     setSortDropdownOpen(prev => ({ ...prev, [tableName]: false }));
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  };
+
+  const reorderSortConditions = (tableName: string, fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    const list = [...(sortConditions[tableName] || [])];
+    const [removed] = list.splice(fromIndex, 1);
+    list.splice(toIndex, 0, removed);
+    setSortConditions({ ...sortConditions, [tableName]: list });
   };
 
   const removeSortCondition = (tableName: string, index: number) => {
@@ -503,6 +518,14 @@ function Schema() {
       ...sortConditions,
       [tableName]: newConditions
     });
+  };
+
+  const toggleSortOrder = (tableName: string, index: number) => {
+    const currentConditions = sortConditions[tableName] || [];
+    const row = currentConditions[index];
+    if (!row) return;
+    const nextOrder = row.order === 'ASC' ? 'DESC' : 'ASC';
+    updateSortCondition(tableName, index, 'order', nextOrder);
   };
 
   const MAX_QUERY_LIMIT = 1000;
@@ -766,20 +789,32 @@ function Schema() {
                         <svg className="w-6 h-6 mx-auto mb-2 animate-spin text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
-                        <p className="text-sm font-medium">{schemaProgress?.phase === 'loading' ? '正在获取表列表...' : '正在加载表结构...'}</p>
+                        <p className="text-sm font-medium">
+                          {schemaProgress?.phase === 'loading' ? '正在获取表列表…' : '正在加载表结构…'}
+                        </p>
+                        {schemaProgress?.detail && (
+                          <p className="mt-1 text-xs text-slate-400 px-1 leading-snug">{schemaProgress.detail}</p>
+                        )}
                       </div>
                       {schemaProgress && schemaProgress.total > 0 && (
                         <div className="mb-2">
-                          <div className="flex justify-between text-xs text-slate-400 mb-1">
-                            <span className="truncate max-w-xs font-mono">{schemaProgress.currentTable}</span>
-                            <span>{schemaProgress.current} / {schemaProgress.total}</span>
+                          <div className="flex justify-between text-xs text-slate-400 mb-1 gap-2">
+                            <span className="truncate min-w-0 font-mono" title={schemaProgress.currentTable}>
+                              {schemaProgress.currentTable}
+                            </span>
+                            <span className="flex-shrink-0">{schemaProgress.current} / {schemaProgress.total}</span>
                           </div>
-                          <div className="w-full bg-slate-200 rounded-full h-2">
+                          <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
                             <div
-                              className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                              style={{ width: `${(schemaProgress.current / schemaProgress.total) * 100}%` }}
-                            ></div>
+                              className="bg-gradient-to-r from-blue-500 to-indigo-500 h-2.5 rounded-full transition-[width] duration-500 ease-out"
+                              style={{ width: `${Math.min(100, (schemaProgress.current / schemaProgress.total) * 100)}%` }}
+                            />
                           </div>
+                        </div>
+                      )}
+                      {schemaProgress && schemaProgress.total === 0 && schemaProgress.phase === 'loading' && (
+                        <div className="mb-2 h-2.5 w-full rounded-full bg-slate-200 overflow-hidden">
+                          <div className="h-full w-1/3 rounded-full bg-gradient-to-r from-blue-400 to-indigo-400 animate-pulse" />
                         </div>
                       )}
                       <button
@@ -1118,10 +1153,9 @@ function Schema() {
                 )}
 
                 {activeSubTab === 'query' && (
-                  <div className="flex-1 flex flex-col overflow-hidden relative">
-                    <div className="flex-shrink-0 bg-gradient-to-br from-slate-50 to-white border-b border-slate-200">
-                      <div className="flex items-center justify-between gap-4 p-4">
-                        <div className="flex items-center space-x-4 overflow-x-auto">
+                  <div className="relative grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_minmax(12rem,1fr)] overflow-hidden">
+                    <div className="border-b border-slate-200 bg-gradient-to-br from-slate-50 to-white px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-4">
                           <label className="flex items-center space-x-2 cursor-pointer whitespace-nowrap">
                             <input
                               type="checkbox"
@@ -1150,24 +1184,23 @@ function Schema() {
                               </div>
                             ) : null;
                           })()}
-                        </div>
                       </div>
-
-                      <div className="fixed top-32 right-6 z-20 flex items-center space-x-2">
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
                         <button
                           onClick={() => executeQuery(activeTable.tableInfo, activeTable.tableName)}
                           disabled={isExecuting}
-                          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors font-medium text-sm shadow-md"
+                          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors font-medium text-sm shadow-sm"
                         >
                           {isExecuting ? '执行中...' : '执行查询'}
                         </button>
-                        <button onClick={() => exportSQL(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors shadow-md">导出 SQL</button>
-                        <button onClick={() => exportExcel(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors shadow-md">导出 Excel</button>
+                        <button onClick={() => exportSQL(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors shadow-sm">导出 SQL</button>
+                        <button onClick={() => exportExcel(activeTable.tableInfo, activeTable.tableName)} className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm transition-colors shadow-sm">导出 Excel</button>
                       </div>
+                    </div>
 
-                      <div className="px-4 pb-4 space-y-3">
-                        <div className="rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm">
-                          <div className="flex flex-col gap-2 border-b border-slate-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-h-0 flex-col gap-3 overflow-hidden px-4 py-3 md:flex-row md:items-stretch md:gap-4">
+                        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[63%] md:flex-none">
+                          <div className="flex flex-shrink-0 flex-col gap-2 border-b border-slate-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="min-w-0">
                               <span className="text-xs font-semibold text-slate-700">查询条件</span>
                               <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
@@ -1249,7 +1282,7 @@ function Schema() {
                             </div>
                           </div>
 
-                          <div className="max-h-64 overflow-y-auto px-3 py-3">
+                          <div className="min-h-0 max-h-[min(16rem,42vh)] flex-1 overflow-x-auto overflow-y-auto px-3 py-3 md:max-h-none">
                             {(queryConditions[activeTable.tableName] || []).length === 0 ? (
                               <p className="py-8 text-center text-xs text-slate-400">暂无条件，使用上方「添加字段」从已标记列中选择</p>
                             ) : (
@@ -1286,20 +1319,20 @@ function Schema() {
                                         </div>
                                       </div>
                                     )}
-                                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm">
+                                    <div className="flex max-w-full flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm">
                                       <span
                                         className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-slate-100 text-[11px] font-bold text-slate-600"
                                         title={`条件 ${index + 1}`}
                                       >
                                         {index + 1}
                                       </span>
-                                      <div className="min-w-0 max-w-[10rem] flex-shrink-0">
+                                      <div className="min-w-0 max-w-[12rem] flex-shrink-0">
                                         <div className="truncate font-mono text-[11px] text-slate-900" title={condition.columnName}>
                                           {condition.columnName}
                                         </div>
-                                        {column?.comments ? (
+                                        {showColumnNamesInChinese && column?.comments ? (
                                           <div className="truncate text-[10px] text-slate-400" title={column.comments}>
-                                            {getColumnDisplayName(column)}
+                                            {column.comments}
                                           </div>
                                         ) : null}
                                       </div>
@@ -1354,25 +1387,66 @@ function Schema() {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-medium text-gray-600 whitespace-nowrap">排序条件:</span>
-                            <div className="flex items-center gap-2 flex-wrap">
+                        <div className="hidden w-px shrink-0 self-stretch bg-slate-200 md:block" aria-hidden />
+
+                        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[37%] md:flex-none">
+                          <div className="flex-shrink-0 border-b border-slate-200 px-3 py-2">
+                            <span className="text-xs font-semibold text-slate-700">排序条件</span>
+                            <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                              拖拽 ⋮⋮ 调整顺序；点击箭头切换升序 / 降序。
+                            </p>
+                          </div>
+                          <div className="min-h-0 max-h-[min(16rem,42vh)] flex-1 overflow-x-auto overflow-y-auto px-3 py-3 md:max-h-none">
+                            <div className="flex flex-wrap items-center gap-2">
                               {(sortConditions[activeTable.tableName] || []).map((sort, index) => {
                                 const column = activeTable.tableInfo.columns.find(c => c.columnName === sort.columnName);
+                                const sortKey = sort.id || `sort-${sort.columnName}-${index}`;
                                 return (
-                                  <div key={index} className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1">
-                                    <span className="font-mono text-xs whitespace-nowrap">{column ? getColumnDisplayName(column) : sort.columnName}</span>
-                                    <select
-                                      value={sort.order}
-                                      onChange={(e) => updateSortCondition(activeTable.tableName, index, 'order', e.target.value)}
-                                      className="border-0 text-xs py-0 px-1 bg-transparent"
+                                  <div
+                                    key={sortKey}
+                                    draggable
+                                    onDragStart={(e) => {
+                                      e.dataTransfer.effectAllowed = 'move';
+                                      e.dataTransfer.setData('application/x-sort-index', String(index));
+                                    }}
+                                    onDragOver={(e) => {
+                                      e.preventDefault();
+                                      e.dataTransfer.dropEffect = 'move';
+                                    }}
+                                    onDrop={(e) => {
+                                      e.preventDefault();
+                                      const from = parseInt(e.dataTransfer.getData('application/x-sort-index'), 10);
+                                      if (!Number.isNaN(from)) {
+                                        reorderSortConditions(activeTable.tableName, from, index);
+                                      }
+                                    }}
+                                    className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white py-1 pl-1 pr-2 text-xs shadow-sm ring-slate-200/80 transition-shadow hover:shadow-md"
+                                  >
+                                    <span
+                                      className="cursor-grab select-none px-1 text-slate-400 hover:text-slate-600 active:cursor-grabbing"
+                                      title="拖拽调整顺序"
+                                      aria-hidden
                                     >
-                                      <option value="ASC">↑ ASC</option>
-                                      <option value="DESC">↓ DESC</option>
-                                    </select>
-                                    <button onClick={() => removeSortCondition(activeTable.tableName, index)} className="text-red-500 hover:text-red-700 ml-1">
-                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      ⋮⋮
+                                    </span>
+                                    <span className="max-w-[10rem] truncate font-mono text-[11px] text-slate-800" title={sort.columnName}>
+                                      {column ? getColumnDisplayName(column) : sort.columnName}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleSortOrder(activeTable.tableName, index)}
+                                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                      title={sort.order === 'ASC' ? '升序，点击切换为降序' : '降序，点击切换为升序'}
+                                    >
+                                      <span className="text-sm leading-none">{sort.order === 'ASC' ? '↑' : '↓'}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeSortCondition(activeTable.tableName, index)}
+                                      className="ml-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-red-50 hover:text-red-600"
+                                      title="删除"
+                                    >
+                                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                       </svg>
                                     </button>
@@ -1438,10 +1512,9 @@ function Schema() {
                             </div>
                           </div>
                         </div>
-                      </div>
                     </div>
 
-                    <div className="flex-1 overflow-hidden bg-white">
+                    <div className="flex min-h-0 flex-col overflow-hidden border-t border-slate-200 bg-white">
                       {queryResults[activeTable.tableName] ? (
                         (() => {
                           const results = queryResults[activeTable.tableName];
@@ -1566,6 +1639,15 @@ function Schema() {
                   className="rounded"
                 />
                 <span className="text-sm text-slate-600">过滤表数据为空的表格</span>
+              </label>
+              <label className="flex items-center space-x-2 cursor-pointer mb-3">
+                <input
+                  type="checkbox"
+                  checked={filterNoCommentTables}
+                  onChange={(e) => setFilterNoCommentTables(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-sm text-slate-600">过滤无表注释的表（临时表等）</span>
               </label>
               {schemaFilterHistory.length > 0 && (
                 <div className="mb-3">
@@ -1912,6 +1994,10 @@ function AnalysisPage() {
 
   const { activeProject } = useProjectStore();
   const [view, setView] = useState<'new' | 'history' | 'detail'>('new');
+  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'ai'; content: string }>>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const currentRecord = analysisRecords.find(r => r.id === currentRecordId) || null;
 
@@ -1931,7 +2017,7 @@ function AnalysisPage() {
     if (window.electronAPI?.onAnalysisStepError) {
       cleanups.push(window.electronAPI.onAnalysisStepError((stepData) => {
         errorStep(stepData);
-        if (stepData.id === 'match_repository' || stepData.id === 'fetch_version_and_code') {
+        if (stepData.id === 'match_repository' || stepData.id === 'fetch_version_and_code' || stepData.id === 'deep_analysis') {
           finishAnalysis(stepData.error);
         }
       }));
@@ -1942,8 +2028,24 @@ function AnalysisPage() {
       }));
     }
 
+    if (window.electronAPI?.onChatStreamChunk) {
+      cleanups.push(window.electronAPI.onChatStreamChunk((data) => {
+        setChatMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === 'ai') {
+            return [...prev.slice(0, -1), { ...last, content: last.content + data.chunk }];
+          }
+          return [...prev, { role: 'ai', content: data.chunk }];
+        });
+      }));
+    }
+
     return () => cleanups.forEach(fn => fn());
   }, [updateStep, completeStep, errorStep, appendStreamChunk, finishAnalysis]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
   const handleStartAnalysis = async () => {
     if (!formDescription.trim() || !formLogId.trim()) {
@@ -1974,6 +2076,26 @@ function AnalysisPage() {
       }
     } catch (error) {
       finishAnalysis((error as Error).message || '分析过程发生未知错误');
+    }
+  };
+
+  const sendChatMessage = async () => {
+    const msg = chatInput.trim();
+    if (!msg || chatLoading || !activeProject?.id) return;
+
+    setChatInput('');
+    setChatMessages(prev => [...prev, { role: 'user', content: msg }]);
+    setChatLoading(true);
+
+    try {
+      const result = await (window.electronAPI as any).sendChatMessage(activeProject.id, msg);
+      if (!result.success) {
+        setChatMessages(prev => [...prev, { role: 'ai', content: `错误：${result.message}` }]);
+      }
+    } catch (e) {
+      setChatMessages(prev => [...prev, { role: 'ai', content: `错误：${(e as Error).message}` }]);
+    } finally {
+      setChatLoading(false);
     }
   };
 
@@ -2215,6 +2337,62 @@ function AnalysisPage() {
         {record.status === 'error' && record.error && (
           <div className="bg-red-50 rounded-lg border border-red-200 p-4 text-center text-red-700 text-sm">
             ❌ 分析失败：{record.error}
+          </div>
+        )}
+
+        {record.status === 'completed' && (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="px-5 py-3 border-b border-gray-100">
+              <h3 className="text-sm font-semibold text-gray-700">💬 追问对话</h3>
+            </div>
+            <div className="p-4 max-h-[400px] overflow-y-auto space-y-3">
+              {chatMessages.length === 0 && (
+                <p className="text-gray-400 text-sm text-center py-4">
+                  在下方输入框补充描述或追问，AI 会结合上文分析结果回答
+                </p>
+              )}
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[80%] rounded-lg px-4 py-2 text-sm ${
+                    msg.role === 'user'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-100 text-gray-800'
+                  }`}>
+                    <pre className="whitespace-pre-wrap font-sans leading-relaxed">{msg.content}</pre>
+                  </div>
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="flex justify-start">
+                  <div className="bg-gray-100 rounded-lg px-4 py-2 text-sm text-gray-400">
+                    <svg className="animate-spin h-4 w-4 inline mr-2" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    思考中...
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
+            <div className="px-4 py-3 border-t border-gray-100 flex gap-2">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
+                placeholder="补充描述或继续提问..."
+                disabled={chatLoading}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
+              />
+              <button
+                onClick={sendChatMessage}
+                disabled={chatLoading || !chatInput.trim()}
+                className="px-4 py-2 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                发送
+              </button>
+            </div>
           </div>
         )}
       </div>

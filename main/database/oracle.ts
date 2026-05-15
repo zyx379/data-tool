@@ -72,6 +72,8 @@ export interface SchemaProgress {
   total: number;
   currentTable: string;
   phase: 'loading' | 'processing' | 'complete' | 'error';
+  /** 当前阶段说明，供 UI 展示 */
+  detail?: string;
 }
 
 export type ProgressCallback = (progress: SchemaProgress) => void;
@@ -87,14 +89,21 @@ export async function getOracleTables(
   ownerFilter?: string,
   tableNamePattern?: string,
   abortSignal?: AbortSignal,
-  filterEmptyTables: boolean = false
+  filterEmptyTables: boolean = false,
+  filterNoCommentTables: boolean = true
 ): Promise<TableInfo[]> {
   let connection: oracledb.Connection | null = null;
   const schema = params.schema || params.username.toUpperCase();
 
-  const reportProgress = (current: number, total: number, currentTable: string, phase: SchemaProgress['phase']) => {
+  const reportProgress = (
+    current: number,
+    total: number,
+    currentTable: string,
+    phase: SchemaProgress['phase'],
+    detail?: string
+  ) => {
     if (onProgress) {
-      onProgress({ current, total, currentTable, phase });
+      onProgress({ current, total, currentTable, phase, detail });
     }
   };
 
@@ -132,6 +141,7 @@ export async function getOracleTables(
     console.log('ownerFilter (in getOracleTables):', ownerFilter);
     console.log('tableNamePattern (in getOracleTables):', tableNamePattern);
     console.log('filterEmptyTables:', filterEmptyTables);
+    console.log('filterNoCommentTables:', filterNoCommentTables);
 
     const hasOwnerFilter = ownerFilter && ownerFilter.trim();
     const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
@@ -146,7 +156,13 @@ export async function getOracleTables(
     }
     
     console.log(`Fetching tables: ${filterDesc}`);
-    reportProgress(0, 0, `正在获取表列表... (${filterDesc})`, 'loading');
+    reportProgress(
+      0,
+      0,
+      `正在获取表列表... (${filterDesc})`,
+      'loading',
+      '阶段 1/2：从数据库读取表清单（可按注释过滤）'
+    );
     
     let query = `
       SELECT owner, table_name, NVL(comments, ' ') as table_comments
@@ -160,7 +176,6 @@ export async function getOracleTables(
     
     if (hasTableNamePattern) {
       try {
-        const regex = new RegExp(tableNamePattern, 'i');
         const escapedPattern = escapeOracleRegex(tableNamePattern);
         console.log('Original pattern:', tableNamePattern);
         console.log('Escaped pattern:', escapedPattern);
@@ -169,6 +184,10 @@ export async function getOracleTables(
       } catch (e) {
         console.log('Invalid regex pattern, skipping table name filter:', e);
       }
+    }
+
+    if (filterNoCommentTables) {
+      query += ` AND LENGTH(TRIM(NVL(comments, ' '))) > 0`;
     }
     
     console.log('Final query:', query);
@@ -190,7 +209,7 @@ export async function getOracleTables(
     const tablesData = tablesResult.rows as any[];
     const totalTables = tablesData.length;
 
-    reportProgress(0, totalTables, '开始加载表结构...', 'processing');
+    reportProgress(0, totalTables, '开始加载表结构...', 'processing', '阶段 2/2：读取列、主键、索引并抽样数据');
 
     for (let i = 0; i < tablesData.length; i++) {
       checkAbort();
@@ -203,7 +222,13 @@ export async function getOracleTables(
 
       if (i % 10 === 0 || i === tablesData.length - 1) {
         console.log(`Processing table ${i + 1}/${tablesData.length}: ${fullTableName}`);
-        reportProgress(i + 1, totalTables, fullTableName, 'processing');
+        reportProgress(
+          i + 1,
+          totalTables,
+          fullTableName,
+          'processing',
+          `正在加载表结构 (${i + 1}/${totalTables})`
+        );
       }
 
       const columnsResult = await raceWithAbort(connection.execute(`

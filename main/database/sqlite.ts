@@ -4,6 +4,14 @@ import fs from 'fs';
 import { app } from 'electron';
 import CryptoJS from 'crypto-js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  ensureSchemaCacheDir,
+  readSchemaCacheFromFile,
+  writeSchemaCacheToFile,
+  deleteSchemaCacheFile,
+  getSchemaCacheDir,
+} from './schemaCacheFiles';
+import { mergeSchemaIncremental, schemaTableKey } from './schemaMerge';
 
 const ENCRYPTION_KEY = 'zoehis-helper-encryption-key-v1';
 
@@ -80,6 +88,43 @@ function saveDatabase() {
     } catch (e) {
       console.error('Failed to save database:', e);
     }
+  }
+}
+
+/** 将旧版 SQLite schema_cache 一次性迁出到 userData/schema-cache/{id}.json */
+function migrateSchemaCacheFromSqliteToFiles(): void {
+  if (!db) return;
+  try {
+    ensureSchemaCacheDir();
+    const database = db;
+    const stmt = database.prepare('SELECT dataSourceId, schemaData FROM schema_cache');
+    const byId = new Map<string, any[]>();
+    while (stmt.step()) {
+      const row = stmt.get() as unknown[];
+      const dsId = row[0] as string;
+      let tables: any[];
+      try {
+        tables = JSON.parse(row[1] as string);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(tables)) continue;
+      const prev = byId.get(dsId) || [];
+      byId.set(dsId, mergeSchemaIncremental(prev, tables));
+    }
+    stmt.free();
+
+    if (byId.size === 0) {
+      return;
+    }
+
+    for (const [dsId, tables] of byId) {
+      writeSchemaCacheToFile(dsId, tables);
+    }
+    database.run('DELETE FROM schema_cache');
+    console.log('[schema-cache] Migrated', byId.size, 'data source(s) from SQLite to JSON files');
+  } catch (e) {
+    console.error('[schema-cache] SQLite migration failed:', e);
   }
 }
 
@@ -296,20 +341,8 @@ export async function initDatabase() {
     // 忽略检查错误
   }
 
-  // 调试：查询现有 schema_cache
-  try {
-    const result = db.exec('SELECT dataSourceId, filterPattern, cachedAt FROM schema_cache ORDER BY cachedAt DESC');
-    if (result.length > 0 && result[0].values.length > 0) {
-      console.log('[DEBUG] Existing schema_cache entries:');
-      result[0].values.forEach((row, index) => {
-        console.log(`[DEBUG]   ${index + 1}: dataSourceId=${row[0]}, filterPattern=${row[1]}, cachedAt=${row[2]}`);
-      });
-    } else {
-      console.log('[DEBUG] No existing schema_cache entries found');
-    }
-  } catch (e) {
-    console.log('[DEBUG] Error checking schema_cache:', e);
-  }
+  ensureSchemaCacheDir();
+  migrateSchemaCacheFromSqliteToFiles();
 
   saveDatabase();
   console.log('Database initialized successfully');
@@ -442,6 +475,7 @@ export function updateDataSource(id: string, ds: Partial<DataSourceRecord>): Dat
 }
 
 export function deleteDataSource(id: string) {
+  deleteSchemaCacheFile(id);
   const database = getDb();
   database.run('DELETE FROM data_sources WHERE id = ?', [id]);
   saveDatabase();
@@ -517,166 +551,129 @@ export function clearQueryHistory() {
 }
 
 export function getSchemaCache(dataSourceId: string, filterPattern?: string, matchAnyFilter: boolean = false): any | undefined {
-  console.log('[DEBUG] getSchemaCache called with:');
-  console.log('[DEBUG]   dataSourceId:', dataSourceId);
-  console.log('[DEBUG]   filterPattern:', filterPattern);
-  console.log('[DEBUG]   matchAnyFilter:', matchAnyFilter);
+  ensureSchemaCacheDir();
+  void filterPattern;
+  void matchAnyFilter;
 
-  const database = getDb();
-
-  let query: string;
-  let params: any[];
-  const results: any[] = [];
-
-  if (matchAnyFilter) {
-    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? ORDER BY cachedAt DESC';
-    params = [dataSourceId];
-  } else {
-    query = 'SELECT * FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL)) ORDER BY cachedAt DESC LIMIT 1';
-    const bindFilter = filterPattern || null;
-    params = [dataSourceId, bindFilter, bindFilter];
+  let filePayload = readSchemaCacheFromFile(dataSourceId);
+  if (!filePayload) {
+    migrateSchemaCacheFromSqliteToFiles();
+    filePayload = readSchemaCacheFromFile(dataSourceId);
   }
+  if (!filePayload) return undefined;
 
-  console.log('[DEBUG] Query:', query);
-  console.log('[DEBUG] Params:', params);
-
-  const stmt = database.prepare(query);
-  stmt.bind(params);
-
-  while (stmt.step()) {
-    const row = stmt.get();
-    try {
-      results.push({
-        id: row[0] as string,
-        dataSourceId: row[1] as string,
-        schemaData: JSON.parse(row[2] as string),
-        filterPattern: row[3] as string | null,
-        cachedAt: row[4] as string,
-      });
-    } catch (e) {
-      console.error('[DEBUG] Error parsing schemaData JSON:', e);
-    }
-  }
-
-  stmt.free();
-
-  console.log('[DEBUG] Found', results.length, 'cache results');
-
-  if (results.length === 0) {
-    console.log('[DEBUG] No cache results found, returning undefined');
-    return undefined;
-  }
-
-  if (!matchAnyFilter || results.length === 1) {
-    console.log('[DEBUG] Returning single result with', results[0].schemaData?.length, 'tables');
-    return results[0];
-  }
-
-  console.log('[DEBUG] Merging multiple cache results');
-  const mergedSchemaData: any[] = [];
-  const seenTables = new Set<string>();
-
-  for (const result of results) {
-    console.log('[DEBUG] Processing result with', result.schemaData?.length, 'tables');
-    for (const table of result.schemaData) {
-      if (!seenTables.has(table.tableName)) {
-        seenTables.add(table.tableName);
-        mergedSchemaData.push(table);
-      }
-    }
-  }
-
-  console.log('[DEBUG] Merged result has', mergedSchemaData.length, 'unique tables');
   return {
-    id: results[0].id,
-    dataSourceId: results[0].dataSourceId,
-    schemaData: mergedSchemaData,
+    id: dataSourceId,
+    dataSourceId,
+    schemaData: filePayload.tables,
     filterPattern: null,
-    cachedAt: results[0].cachedAt,
+    cachedAt: filePayload.cachedAt,
   };
 }
 
 export function setSchemaCache(dataSourceId: string, schemaData: any[], filterPattern?: string) {
-  console.log('[DEBUG] ========== setSchemaCache START ==========');
-  console.log('[DEBUG] dataSourceId:', dataSourceId);
-  console.log('[DEBUG] schemaData.length:', schemaData.length);
-  console.log('[DEBUG] filterPattern:', filterPattern);
-  
+  void filterPattern;
+  console.log('[schema-cache] setSchemaCache', dataSourceId, 'table count:', schemaData.length);
+  writeSchemaCacheToFile(dataSourceId, schemaData);
   const database = getDb();
-  const id = uuidv4();
-  const now = new Date().toISOString();
-  const schemaJson = JSON.stringify(schemaData);
-
-  // 先删除相同 dataSourceId 和 filterPattern 的旧缓存
-  console.log('[DEBUG] Deleting old cache entries...');
-  database.run(
-    'DELETE FROM schema_cache WHERE dataSourceId = ? AND (filterPattern = ? OR (filterPattern IS NULL AND ? IS NULL))',
-    [dataSourceId, filterPattern || null, filterPattern || null]
-  );
-
-  console.log('[DEBUG] Inserting new cache with id:', id);
-  database.run(
-    `INSERT INTO schema_cache (id, dataSourceId, schemaData, filterPattern, cachedAt, version)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, dataSourceId, schemaJson, filterPattern || null, now, 'v2']
-  );
-
-  console.log('[DEBUG] Calling saveDatabase()...');
+  try {
+    database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
+  } catch (e) {
+    console.warn('[schema-cache] cleanup SQLite rows:', e);
+  }
   saveDatabase();
-  console.log('[DEBUG] ========== setSchemaCache COMPLETE ==========');
-  return { id, cachedAt: now };
+  return { id: dataSourceId, cachedAt: new Date().toISOString() };
 }
 
 export function clearSchemaCache(dataSourceId?: string) {
-  const database = getDb();
   if (dataSourceId) {
+    deleteSchemaCacheFile(dataSourceId);
+    const database = getDb();
     database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
   } else {
+    try {
+      const dir = getSchemaCacheDir();
+      if (fs.existsSync(dir)) {
+        for (const name of fs.readdirSync(dir)) {
+          if (name.endsWith('.json')) {
+            fs.unlinkSync(path.join(dir, name));
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[schema-cache] clear all files:', e);
+    }
+    const database = getDb();
     database.run('DELETE FROM schema_cache');
   }
   saveDatabase();
 }
 
 export function cleanOldSchemaCache(keepDays: number = 30) {
+  const cutoff = Date.now() - keepDays * 86400000;
+  try {
+    ensureSchemaCacheDir();
+    const dir = getSchemaCacheDir();
+    if (fs.existsSync(dir)) {
+      for (const name of fs.readdirSync(dir)) {
+        if (!name.endsWith('.json')) continue;
+        const fp = path.join(dir, name);
+        const st = fs.statSync(fp);
+        if (st.mtimeMs < cutoff) {
+          fs.unlinkSync(fp);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[schema-cache] cleanOldSchemaCache files:', e);
+  }
   const database = getDb();
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - keepDays);
-  const cutoffStr = cutoffDate.toISOString();
-
-  database.run('DELETE FROM schema_cache WHERE cachedAt < ?', [cutoffStr]);
+  database.run('DELETE FROM schema_cache WHERE cachedAt < ?', [new Date(cutoff).toISOString()]);
   saveDatabase();
 }
 
 export function removeTableFromSchemaCache(dataSourceId: string, tableName: string) {
-  const database = getDb();
-  const allCaches = getSchemaCache(dataSourceId, undefined, true);
-  if (!allCaches) return;
+  const payload = readSchemaCacheFromFile(dataSourceId);
+  if (!payload) return;
 
-  const schemaArray = Array.isArray(allCaches.schemaData) ? allCaches.schemaData : [];
-  const filteredSchema = schemaArray.filter((table: any) => table.tableName !== tableName);
-
-  database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
-  saveDatabase();
+  const schemaArray = Array.isArray(payload.tables) ? payload.tables : [];
+  const filteredSchema = schemaArray.filter(
+    (table: any) => schemaTableKey(table.tableName) !== schemaTableKey(tableName)
+  );
+  if (filteredSchema.length === schemaArray.length) return;
 
   if (filteredSchema.length > 0) {
-    setSchemaCache(dataSourceId, filteredSchema, undefined);
+    writeSchemaCacheToFile(dataSourceId, filteredSchema);
+  } else {
+    deleteSchemaCacheFile(dataSourceId);
+  }
+  try {
+    getDb().run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
+    saveDatabase();
+  } catch {
+    /* ignore */
   }
 }
 
 export function removeTablesFromSchemaCache(dataSourceId: string, tableNames: string[]) {
-  const database = getDb();
-  const allCaches = getSchemaCache(dataSourceId, undefined, true);
-  if (!allCaches) return;
+  const payload = readSchemaCacheFromFile(dataSourceId);
+  if (!payload) return;
 
-  const schemaArray = Array.isArray(allCaches.schemaData) ? allCaches.schemaData : [];
-  const tableNameSet = new Set(tableNames);
-  const filteredSchema = schemaArray.filter((table: any) => !tableNameSet.has(table.tableName));
-
-  database.run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
-  saveDatabase();
+  const keySet = new Set(tableNames.map((n) => schemaTableKey(n)));
+  const schemaArray = Array.isArray(payload.tables) ? payload.tables : [];
+  const filteredSchema = schemaArray.filter((table: any) => !keySet.has(schemaTableKey(table.tableName)));
+  if (filteredSchema.length === schemaArray.length) return;
 
   if (filteredSchema.length > 0) {
-    setSchemaCache(dataSourceId, filteredSchema, undefined);
+    writeSchemaCacheToFile(dataSourceId, filteredSchema);
+  } else {
+    deleteSchemaCacheFile(dataSourceId);
+  }
+  try {
+    getDb().run('DELETE FROM schema_cache WHERE dataSourceId = ?', [dataSourceId]);
+    saveDatabase();
+  } catch {
+    /* ignore */
   }
 }
 

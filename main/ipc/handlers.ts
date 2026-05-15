@@ -1,9 +1,12 @@
 import { ipcMain, BrowserWindow } from 'electron';
+import { mergeSchemaIncremental } from '../database/schemaMerge';
 import {
   createAgent,
+  ChatSession,
   AnalysisRequest,
   AnalysisStepData,
   AnalysisStepId,
+  ConversationMessage,
 } from '../agent';
 import {
   getAllProjects,
@@ -48,6 +51,7 @@ import { getDamengTables, executeDamengQuery, testDamengConnection } from '../da
 import { testRedisConnection, getTokensFromRedis, getFirstTokenFromRedis } from '../redis';
 
 let currentAbortController: AbortController | null = null;
+const chatSessions = new Map<string, ChatSession>();
 
 export function registerIpcHandlers() {
   ipcMain.handle('api:startAnalysis', async (_event, request: AnalysisRequest) => {
@@ -68,7 +72,7 @@ export function registerIpcHandlers() {
           if (step) {
             step.status = 'loading';
           }
-          mainWindow.webContents.send('analysis:stepUpdate', { stepId, status: 'loading' });
+          mainWindow.webContents.send('analysis:stepUpdate', { id: stepId, status: 'loading' });
         },
 
         onStepUpdate: (stepData: AnalysisStepData) => {
@@ -116,7 +120,17 @@ export function registerIpcHandlers() {
         },
       };
 
-      await agent.runStepByStep(request, callback);
+      const conversation = await agent.runStepByStep(request, callback);
+
+      chatSessions.set(request.projectId, new ChatSession(conversation, {
+        projectId: request.projectId,
+        apiBaseUrl: request.apiBaseUrl,
+        apiToken: request.apiToken,
+        apiLogPath: request.apiLogPath,
+        apiTokenPath: request.apiTokenPath,
+        apiVersionPath: request.apiVersionPath,
+        logId: request.logId,
+      }));
 
       return {
         success: true,
@@ -169,7 +183,18 @@ export function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle('db:getSchema', async (_event, dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache: boolean = true, filterEmptyTables: boolean = false) => {
+  ipcMain.handle(
+    'db:getSchema',
+    async (
+      _event,
+      dataSourceId: string,
+      ownerFilter?: string,
+      tableNamePattern?: string,
+      useCache: boolean = true,
+      filterEmptyTables: boolean = false,
+      mergeWithExistingCache: boolean = false,
+      filterNoCommentTables: boolean = true
+    ) => {
     try {
       if (currentAbortController) {
         currentAbortController.abort();
@@ -191,6 +216,11 @@ export function registerIpcHandlers() {
       let tables: any[] = [];
       const abortSignal = currentAbortController.signal;
 
+      const progressWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      const onSchemaProgress = (progress: import('../database/oracle').SchemaProgress) => {
+        progressWindow?.webContents.send('schema:progress', progress);
+      };
+
       if (dataSource.type === 'oracle') {
         tables = await getOracleTables(
           {
@@ -202,11 +232,12 @@ export function registerIpcHandlers() {
             password: dataSource.password,
             schema: dataSource.schema,
           },
-          undefined,
+          onSchemaProgress,
           ownerFilter,
           tableNamePattern,
           abortSignal,
-          filterEmptyTables
+          filterEmptyTables,
+          filterNoCommentTables
         );
       } else if (dataSource.type === 'dameng') {
         tables = await getDamengTables(
@@ -217,16 +248,26 @@ export function registerIpcHandlers() {
             username: dataSource.username,
             password: dataSource.password,
           },
-          undefined,
+          onSchemaProgress,
           tableNamePattern,
           abortSignal,
-          filterEmptyTables
+          filterEmptyTables,
+          filterNoCommentTables
         );
       }
 
-      setSchemaCache(dataSourceId, tables, undefined);
+      let tablesToSave = tables;
+      if (mergeWithExistingCache) {
+        const existing = getSchemaCache(dataSourceId, undefined, true);
+        const base =
+          existing?.schemaData && Array.isArray(existing.schemaData) ? existing.schemaData : [];
+        tablesToSave = mergeSchemaIncremental(base, tables);
+        console.log('[db:getSchema] mergeWithExistingCache: base', base.length, '+ fetched', tables.length, '=>', tablesToSave.length);
+      }
 
-      return tables;
+      setSchemaCache(dataSourceId, tablesToSave, undefined);
+
+      return tablesToSave;
     } catch (error) {
       if ((error as Error).message === 'Operation cancelled') {
         return [];
@@ -776,6 +817,32 @@ export function registerIpcHandlers() {
     } catch (error) {
       console.error('Error getting logs:', error);
       throw error;
+    }
+  });
+
+  ipcMain.handle('chat:sendMessage', async (_event, projectId: string, message: string) => {
+    try {
+      const session = chatSessions.get(projectId);
+      if (!session) {
+        return { success: false, message: '聊天会话不存在，请先完成分析' };
+      }
+
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      if (!mainWindow) {
+        throw new Error('未找到主窗口');
+      }
+
+      const result = await session.sendMessage(message, (chunk) => {
+        mainWindow.webContents.send('chat:streamChunk', { projectId, chunk });
+      });
+
+      return { success: true, content: result.content };
+    } catch (error) {
+      console.error('Chat error:', error);
+      return {
+        success: false,
+        message: (error as Error).message || '对话过程发生错误',
+      };
     }
   });
 }

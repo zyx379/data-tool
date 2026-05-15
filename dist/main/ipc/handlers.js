@@ -2,12 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerIpcHandlers = registerIpcHandlers;
 const electron_1 = require("electron");
+const schemaMerge_1 = require("../database/schemaMerge");
 const agent_1 = require("../agent");
 const sqlite_1 = require("../database/sqlite");
 const oracle_1 = require("../database/oracle");
 const dameng_1 = require("../database/dameng");
 const redis_1 = require("../redis");
 let currentAbortController = null;
+const chatSessions = new Map();
 function registerIpcHandlers() {
     electron_1.ipcMain.handle('api:startAnalysis', async (_event, request) => {
         try {
@@ -24,7 +26,7 @@ function registerIpcHandlers() {
                     if (step) {
                         step.status = 'loading';
                     }
-                    mainWindow.webContents.send('analysis:stepUpdate', { stepId, status: 'loading' });
+                    mainWindow.webContents.send('analysis:stepUpdate', { id: stepId, status: 'loading' });
                 },
                 onStepUpdate: (stepData) => {
                     const existingIndex = steps.findIndex(s => s.id === stepData.id);
@@ -70,7 +72,16 @@ function registerIpcHandlers() {
                     mainWindow.webContents.send('analysis:streamChunk', content);
                 },
             };
-            await agent.runStepByStep(request, callback);
+            const conversation = await agent.runStepByStep(request, callback);
+            chatSessions.set(request.projectId, new agent_1.ChatSession(conversation, {
+                projectId: request.projectId,
+                apiBaseUrl: request.apiBaseUrl,
+                apiToken: request.apiToken,
+                apiLogPath: request.apiLogPath,
+                apiTokenPath: request.apiTokenPath,
+                apiVersionPath: request.apiVersionPath,
+                logId: request.logId,
+            }));
             return {
                 success: true,
                 steps,
@@ -122,7 +133,7 @@ function registerIpcHandlers() {
             throw error;
         }
     });
-    electron_1.ipcMain.handle('db:getSchema', async (_event, dataSourceId, ownerFilter, tableNamePattern, useCache = true, filterEmptyTables = false) => {
+    electron_1.ipcMain.handle('db:getSchema', async (_event, dataSourceId, ownerFilter, tableNamePattern, useCache = true, filterEmptyTables = false, mergeWithExistingCache = false, filterNoCommentTables = true) => {
         try {
             if (currentAbortController) {
                 currentAbortController.abort();
@@ -140,6 +151,10 @@ function registerIpcHandlers() {
             }
             let tables = [];
             const abortSignal = currentAbortController.signal;
+            const progressWindow = electron_1.BrowserWindow.getFocusedWindow() ?? electron_1.BrowserWindow.getAllWindows()[0];
+            const onSchemaProgress = (progress) => {
+                progressWindow?.webContents.send('schema:progress', progress);
+            };
             if (dataSource.type === 'oracle') {
                 tables = await (0, oracle_1.getOracleTables)({
                     host: dataSource.host,
@@ -149,7 +164,7 @@ function registerIpcHandlers() {
                     username: dataSource.username,
                     password: dataSource.password,
                     schema: dataSource.schema,
-                }, undefined, ownerFilter, tableNamePattern, abortSignal, filterEmptyTables);
+                }, onSchemaProgress, ownerFilter, tableNamePattern, abortSignal, filterEmptyTables, filterNoCommentTables);
             }
             else if (dataSource.type === 'dameng') {
                 tables = await (0, dameng_1.getDamengTables)({
@@ -158,10 +173,17 @@ function registerIpcHandlers() {
                     schema: dataSource.schema || dataSource.username,
                     username: dataSource.username,
                     password: dataSource.password,
-                }, undefined, tableNamePattern, abortSignal, filterEmptyTables);
+                }, onSchemaProgress, tableNamePattern, abortSignal, filterEmptyTables, filterNoCommentTables);
             }
-            (0, sqlite_1.setSchemaCache)(dataSourceId, tables, undefined);
-            return tables;
+            let tablesToSave = tables;
+            if (mergeWithExistingCache) {
+                const existing = (0, sqlite_1.getSchemaCache)(dataSourceId, undefined, true);
+                const base = existing?.schemaData && Array.isArray(existing.schemaData) ? existing.schemaData : [];
+                tablesToSave = (0, schemaMerge_1.mergeSchemaIncremental)(base, tables);
+                console.log('[db:getSchema] mergeWithExistingCache: base', base.length, '+ fetched', tables.length, '=>', tablesToSave.length);
+            }
+            (0, sqlite_1.setSchemaCache)(dataSourceId, tablesToSave, undefined);
+            return tablesToSave;
         }
         catch (error) {
             if (error.message === 'Operation cancelled') {
@@ -696,6 +718,29 @@ function registerIpcHandlers() {
         catch (error) {
             console.error('Error getting logs:', error);
             throw error;
+        }
+    });
+    electron_1.ipcMain.handle('chat:sendMessage', async (_event, projectId, message) => {
+        try {
+            const session = chatSessions.get(projectId);
+            if (!session) {
+                return { success: false, message: '聊天会话不存在，请先完成分析' };
+            }
+            const mainWindow = electron_1.BrowserWindow.getAllWindows()[0];
+            if (!mainWindow) {
+                throw new Error('未找到主窗口');
+            }
+            const result = await session.sendMessage(message, (chunk) => {
+                mainWindow.webContents.send('chat:streamChunk', { projectId, chunk });
+            });
+            return { success: true, content: result.content };
+        }
+        catch (error) {
+            console.error('Chat error:', error);
+            return {
+                success: false,
+                message: error.message || '对话过程发生错误',
+            };
         }
     });
 }

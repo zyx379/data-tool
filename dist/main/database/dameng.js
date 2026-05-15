@@ -24,7 +24,7 @@ async function testDamengConnection(params) {
         return { success: false, message: error.message };
     }
 }
-async function getDamengTables(params, onProgress, tableNamePattern, abortSignal, filterEmptyTables = false) {
+async function getDamengTables(params, onProgress, tableNamePattern, abortSignal, filterEmptyTables = false, filterNoCommentTables = true) {
     const Connection = require('dmdb');
     const conn = new Connection({
         host: params.host,
@@ -33,9 +33,9 @@ async function getDamengTables(params, onProgress, tableNamePattern, abortSignal
         dba_password: params.password,
         database: params.schema,
     });
-    const reportProgress = (current, total, currentTable, phase) => {
+    const reportProgress = (current, total, currentTable, phase, detail) => {
         if (onProgress) {
-            onProgress({ current, total, currentTable, phase });
+            onProgress({ current, total, currentTable, phase, detail });
         }
     };
     const abortPromise = abortSignal ? new Promise((_, reject) => {
@@ -57,27 +57,41 @@ async function getDamengTables(params, onProgress, tableNamePattern, abortSignal
         checkAbort();
         console.log('tableNamePattern (in getDamengTables):', tableNamePattern);
         console.log('filterEmptyTables:', filterEmptyTables);
+        console.log('filterNoCommentTables:', filterNoCommentTables);
         const hasTableNamePattern = tableNamePattern && tableNamePattern.trim();
         let filterDesc = '(all tables)';
         if (hasTableNamePattern) {
             filterDesc = `pattern: ${tableNamePattern}`;
         }
         console.log(`Fetching tables: ${filterDesc}`);
-        reportProgress(0, 0, `正在获取表列表... (${filterDesc})`, 'loading');
-        let query = `
+        reportProgress(0, 0, `正在获取表列表... (${filterDesc})`, 'loading', '阶段 1/2：从数据库读取表清单（可按注释过滤）');
+        let query;
+        if (filterNoCommentTables) {
+            query = `
+      SELECT t.TABLE_NAME
+      FROM USER_TABLES t
+      INNER JOIN USER_TAB_COMMENTS c ON t.TABLE_NAME = c.TABLE_NAME
+      WHERE LENGTH(TRIM(NVL(c.COMMENTS, ''))) > 0
+    `;
+        }
+        else {
+            query = `
       SELECT TABLE_NAME
       FROM USER_TABLES
     `;
+        }
         if (hasTableNamePattern) {
             try {
-                const regex = new RegExp(tableNamePattern, 'i');
-                query += ` WHERE REGEXP_LIKE(TABLE_NAME, '${escapeOracleRegex(tableNamePattern)}', 'i')`;
+                const escaped = escapeOracleRegex(tableNamePattern);
+                query += filterNoCommentTables
+                    ? ` AND REGEXP_LIKE(t.TABLE_NAME, '${escaped}', 'i')`
+                    : ` WHERE REGEXP_LIKE(TABLE_NAME, '${escaped}', 'i')`;
             }
             catch {
                 console.log('Invalid regex pattern, skipping table name filter');
             }
         }
-        query += ' ORDER BY TABLE_NAME';
+        query += filterNoCommentTables ? ' ORDER BY t.TABLE_NAME' : ' ORDER BY TABLE_NAME';
         checkAbort();
         const tablesResult = conn.execute(query);
         const tables = [];
@@ -88,13 +102,13 @@ async function getDamengTables(params, onProgress, tableNamePattern, abortSignal
             conn.close();
             return [];
         }
-        reportProgress(0, totalTables, '开始加载表结构...', 'processing');
+        reportProgress(0, totalTables, '开始加载表结构...', 'processing', '阶段 2/2：读取列、主键、索引并抽样数据');
         for (let i = 0; i < tablesData.length; i++) {
             checkAbort();
             const row = tablesData[i];
             const tableName = row[0];
             if (i % 10 === 0 || i === tablesData.length - 1) {
-                reportProgress(i + 1, totalTables, tableName, 'processing');
+                reportProgress(i + 1, totalTables, tableName, 'processing', `正在加载表结构 (${i + 1}/${totalTables})`);
             }
             checkAbort();
             const columnsResult = conn.execute(`

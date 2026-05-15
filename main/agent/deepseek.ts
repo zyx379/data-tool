@@ -176,10 +176,14 @@ export class DeepSeekClient {
             
             if (delta?.tool_calls) {
               for (const tc of delta.tool_calls) {
-                const toolCallId = tc.id || `call_${toolCallsMap.size}`;
-                const existing = toolCallsMap.get(toolCallId);
-                
+                const toolCallIndex = tc.index ?? toolCallsMap.size;
+                const toolCallKey = String(toolCallIndex);
+                const existing = toolCallsMap.get(toolCallKey);
+
                 if (existing) {
+                  if (tc.id && !existing.id) {
+                    existing.id = tc.id;
+                  }
                   if (tc.function?.name) {
                     existing.function.name = tc.function.name;
                   }
@@ -187,8 +191,8 @@ export class DeepSeekClient {
                     existing.function.arguments += tc.function.arguments;
                   }
                 } else {
-                  toolCallsMap.set(toolCallId, {
-                    id: toolCallId,
+                  toolCallsMap.set(toolCallKey, {
+                    id: tc.id || `call_${toolCallIndex}`,
                     type: tc.type || 'function',
                     function: {
                       name: tc.function?.name || '',
@@ -270,7 +274,8 @@ export function parseToolCalls(response: ChatCompletionResponse): ToolCall[] {
         args = argsStr;
       }
     } catch (e) {
-      console.warn('[PARSE_TOOL_CALLS] Failed to parse args for', funcName, ':', e);
+      const preview = typeof argsStr === 'string' ? argsStr.substring(0, 80) : String(argsStr);
+      console.warn(`[PARSE_TOOL_CALLS] Failed to parse args for "${funcName}": ${(e as Error).message} | raw: "${preview}"`);
       args = {};
     }
 

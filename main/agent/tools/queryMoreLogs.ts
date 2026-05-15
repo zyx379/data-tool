@@ -8,6 +8,7 @@ export async function queryMoreLogs(
     logLevel?: string[];
     timeRange?: { startDate: string; endDate: string };
     traceId?: string;
+    keyword?: string;
   },
   projectId: string,
   apiBaseUrl?: string,
@@ -60,7 +61,7 @@ export async function queryMoreLogs(
         wildcardChecked: false,
         operator: '',
         value: '',
-        searchValue: args.traceId || ''
+        searchValue: args.keyword || args.traceId || ''
       }
     };
 

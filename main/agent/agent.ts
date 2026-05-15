@@ -34,7 +34,7 @@ export class HISAnalysisAgent {
     this.deepseekClient = new DeepSeekClient();
   }
 
-  async runStepByStep(request: AnalysisRequest, callback: StepCallback): Promise<void> {
+  async runStepByStep(request: AnalysisRequest, callback: StepCallback): Promise<ConversationMessage[]> {
     this.callback = callback;
 
     // 从全局配置读取 AI 设置
@@ -45,7 +45,7 @@ export class HISAnalysisAgent {
 
     if (!aiApiKey) {
       callback.onStepError('query_log', '未配置 DeepSeek API Key，请在「全局设置」中配置');
-      return;
+      return [];
     }
 
     this.deepseekClient = new DeepSeekClient({
@@ -107,7 +107,7 @@ export class HISAnalysisAgent {
       if (!logResult.success) {
         const errorMsg = logResult.error || '日志查询失败';
         callback.onStepError('query_log', errorMsg);
-        return;
+        return [];
       }
 
       const logDisplay = buildSimpleLogDisplay(logResult.data);
@@ -200,7 +200,7 @@ ${repos.map(r => `- ${r.name} (匹配模式: ${r.servicePatterns})`).join('\n')}
 
         const step3Complete = this.createStepData('match_repository', '📦 步骤 3：匹配代码仓库', noMatchDisplay, repositoryMatch);
         callback.onStepComplete(step3Complete);
-        return;
+        return [];
       }
 
       repositoryMatch = {
@@ -239,7 +239,8 @@ ${repos.map(r => `- ${r.name} (匹配模式: ${r.servicePatterns})`).join('\n')}
           const versionClient = new ApiClient({
             baseUrl: apiBaseUrl,
             versionPath: apiVersionPath,
-            apiKey: 'HIS5',
+            authType: 'custom',
+            customHeaderName: 'onelinkToken',
           });
           versionClient.setToken(apiToken);
 
@@ -285,7 +286,7 @@ ${repos.map(r => `- ${r.name} (匹配模式: ${r.servicePatterns})`).join('\n')}
       if (!codeResult.success) {
         const errorMsg = codeResult.error || '代码获取失败';
         callback.onStepError('fetch_version_and_code', errorMsg);
-        return;
+        return [];
       }
 
       versionAndCode = {
@@ -297,7 +298,10 @@ ${repos.map(r => `- ${r.name} (匹配模式: ${r.servicePatterns})`).join('\n')}
         repositoryName: codeResult.data?.repositoryName || matchedRepo.name,
       };
 
-      const codeFilesDisplay = versionAndCode.files.slice(0, 15).join('\n');
+      const displayFiles = versionAndCode.files.slice(0, 15);
+      const codeFilesDisplay = displayFiles.length > 0
+        ? displayFiles.join('\n')
+        : '（仓库中无文件或获取失败）';
       const truncatedNote = versionAndCode.files.length > 15
         ? `\n\n... 还有 ${versionAndCode.files.length - 15} 个文件未显示`
         : '';
@@ -306,7 +310,7 @@ ${repos.map(r => `- ${r.name} (匹配模式: ${r.servicePatterns})`).join('\n')}
 **推断的分支**: ${versionAndCode.branch}
 **仓库**: ${versionAndCode.repositoryName}
 
-**代码文件列表** (共 ${versionAndCode.totalFiles} 个文件，显示前 ${Math.min(versionAndCode.files.length, 15)} 个):
+**代码文件列表** (共 ${versionAndCode.totalFiles} 个文件，显示前 ${Math.min(displayFiles.length, 15)} 个):
 ${codeFilesDisplay}${truncatedNote}`;
 
       const step4Complete = this.createStepData('fetch_version_and_code', '📥 步骤 4：获取版本信息并拉取代码', versionDisplay, versionAndCode);
@@ -319,6 +323,10 @@ ${codeFilesDisplay}${truncatedNote}`;
 
       const logPrompt = buildToolPrompt('query_log', { logId: request.logId }, logResult);
       const contextPrompt = `## 分析上下文
+
+### ⚠️ 重要：TraceId
+**当前日志的 TraceId 就是日志ID: \`${request.logId}\`**
+查询 SQL 日志、追踪调用链时，直接使用此值作为 traceId 参数。不要从日志内容中寻找 traceId 字段。
 
 ### 已识别服务
 - 服务名: ${serviceIdentification.serviceName}
@@ -335,13 +343,35 @@ ${versionAndCode.files.slice(0, 20).join('\n')}
 
 ${logPrompt}
 
-请根据以上信息进行深度分析。你可以使用以下工具：
-- **get_code(serviceName, filePath)**：获取具体文件内容或关联服务代码
-- **query_more_logs(serviceName, logLevel, timeRange)**：查询更多日志
+## 排查链路（请严格按此顺序执行）
+
+### 第一步：定位报错代码
+使用 get_code 根据堆栈中的文件路径和方法名获取报错代码段。
+⚠️ 优先使用 searchPattern 搜索方法名/类名，不要拉取整个大文件。
+⚠️ 在代码分析中，特别关注 DAO/Mapper 方法调用（如 xxxDao.xxxMethod()、this.dao.xxx()），这些方法名是下一步查询 SQL 的关键入参。
+
+### 第二步：查询 SQL 执行日志（★ 关键步骤）
+代码分析后，如果发现报错与数据库操作相关，必须调用 query_sql_log：
+- traceId: \`"${request.logId}"\`（日志ID即为traceId）
+- sqlId: 代码中发现的 DAO 方法名（如 getOutHospital、findByEventNo）
+⚠️ 这一步能精确还原实际执行的 SQL 语句、入参和返回行数，是定位数据层问题的核心。
+
+### 第三步：验证业务数据
+如果 SQL 日志显示数据异常，调用 query_business_data 执行 SELECT 验证数据状态。
+
+### 第四步：给出结论
+基于代码 + SQL + 数据三个维度的实际证据，给出根因和修复方案。
+⚠️ 禁止基于猜测做推断，所有结论必须有工具返回的实际数据支撑。
+
+## 可用工具
+- **get_code(serviceName, filePath, searchPattern: "方法名")**：精准搜索报错方法代码
+- **get_code(serviceName, filePath, startLine, endLine)**：按行号精确截取代码
+- **query_sql_log(traceId, sqlId: "DAO方法名")**：★ 查询 DAO 方法实际执行的 SQL，traceId 填 \`"${request.logId}"\`
+- **query_more_logs(serviceName, logLevel: ["ERROR"], traceId)**：查更多错误日志，traceId 填 \`"${request.logId}"\`
 - **get_table_schema(tableNamePattern)**：查看表结构
 - **query_business_data(sql, description)**：查询业务数据
 
-请逐步分析，每次只调用一个工具，基于结果继续深入。`;
+每次只调用 1 个工具，基于返回结果决定下一步。`;
 
       conversation.push({
         role: 'assistant',
@@ -387,10 +417,13 @@ ${logPrompt}
       const step6Complete = this.createStepData('conclusion', '📋 步骤 6：分析结论', conclusion);
       callback.onStepComplete(step6Complete);
 
+      return conversation;
+
     } catch (error) {
       const errorMsg = (error as Error).message || '分析过程发生未知错误';
       console.error('[AGENT] Step-by-step analysis error:', error);
       callback.onStepError('deep_analysis', errorMsg);
+      throw error;
     }
   }
 
@@ -431,6 +464,9 @@ ${logPrompt}
         );
       } catch (e) {
         console.error(`[AGENT] Deep analysis iteration ${iterations} failed:`, e);
+        if (iterations === 1) {
+          throw e;
+        }
         break;
       }
 
@@ -445,12 +481,14 @@ ${logPrompt}
         conversation.push(assistantMsg);
       }
 
-      if (toolCalls.length === 0) {
-        console.log('[AGENT] No more tool calls, deep analysis complete');
+      const validToolCalls = toolCalls.filter(tc => tc.name && tc.name.trim());
+
+      if (validToolCalls.length === 0) {
+        console.log('[AGENT] No valid tool calls, deep analysis complete');
         break;
       }
 
-      for (const tc of toolCalls) {
+      for (const tc of validToolCalls) {
         console.log(`[AGENT] Executing tool: ${tc.name}`, tc.arguments);
 
         const assistantToolMsg: ConversationMessage = {

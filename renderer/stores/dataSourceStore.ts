@@ -50,6 +50,7 @@ export interface SchemaProgress {
   total: number;
   currentTable: string;
   phase: 'loading' | 'processing' | 'complete' | 'error';
+  detail?: string;
 }
 
 export type SavedConditionJoin = 'AND' | 'OR';
@@ -91,6 +92,7 @@ interface DataSourceStore {
   abortController: AbortController | null;
   schemaProgress: SchemaProgress | null;
   filterEmptyTables: boolean;
+  filterNoCommentTables: boolean;
   savedQueryConditionTemplates: SavedQueryConditionTemplate[];
   loadDataSources: () => Promise<void>;
   createDataSource: (ds: Omit<DataSource, 'id'>) => Promise<DataSource>;
@@ -98,7 +100,13 @@ interface DataSourceStore {
   deleteDataSource: (id: string) => Promise<void>;
   setActiveDataSource: (id: string) => Promise<void>;
   testConnection: (ds: DataSource) => Promise<{ success: boolean; message: string }>;
-  loadSchema: (dataSourceId: string, useCache?: boolean, mergeWithExisting?: boolean, filterEmptyTables?: boolean) => Promise<void>;
+  loadSchema: (
+    dataSourceId: string,
+    useCache?: boolean,
+    mergeWithExisting?: boolean,
+    filterEmptyTables?: boolean,
+    filterNoCommentTables?: boolean
+  ) => Promise<void>;
   loadSchemaFromCache: (dataSourceId: string) => Promise<boolean>;
   refreshSchema: () => Promise<void>;
   refreshSchemaWithMerge: () => Promise<void>;
@@ -109,6 +117,7 @@ interface DataSourceStore {
   addSchemaFilterHistory: (pattern: string) => void;
   setSchemaProgress: (progress: SchemaProgress | null) => void;
   setFilterEmptyTables: (value: boolean) => void;
+  setFilterNoCommentTables: (value: boolean) => void;
   setFilterRules: (rules: string[]) => void;
   toggleFieldUsed: (dataSourceId: string, tableName: string, columnName: string, used: boolean) => void;
   getUsedFields: (dataSourceId: string, tableName: string) => Set<string>;
@@ -149,6 +158,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       abortController: null,
       schemaProgress: null,
       filterEmptyTables: true,
+      filterNoCommentTables: true,
       savedQueryConditionTemplates: [],
 
       loadDataSources: async () => {
@@ -187,10 +197,10 @@ export const useDataSourceStore = create<DataSourceStore>()(
         return await window.electronAPI.testConnection(ds);
       },
 
-      loadSchema: async (dataSourceId, useCache = true, mergeWithExisting = false, filterEmptyTables = false) => {
+      loadSchema: async (dataSourceId, useCache = true, mergeWithExisting = false, filterEmptyTables = false, filterNoCommentTables = true) => {
       const controller = new AbortController();
       const currentSchema = [...get().schema];
-      set({ schemaLoading: true, schemaError: null, abortController: controller });
+      set({ schemaLoading: true, schemaError: null, abortController: controller, schemaProgress: null });
 
       try {
         const { schemaFilterPattern } = get();
@@ -208,15 +218,24 @@ export const useDataSourceStore = create<DataSourceStore>()(
           }
         }
 
-        const schema = await window.electronAPI.getSchema(dataSourceId, ownerFilter, tableNamePattern, useCache, filterEmptyTables);
+        const schema = await window.electronAPI.getSchema(
+          dataSourceId,
+          ownerFilter,
+          tableNamePattern,
+          useCache,
+          filterEmptyTables,
+          mergeWithExisting,
+          filterNoCommentTables
+        );
 
         if (controller.signal.aborted) {
-          set({ schema: currentSchema, schemaLoading: false, abortController: null });
+          set({ schema: currentSchema, schemaLoading: false, abortController: null, schemaProgress: null });
           return;
         }
 
+        // 增量更新时主进程已合并全量缓存；此处再用正则过滤会误删未匹配的旧表，导致侧栏只剩本次子集
         let filteredSchema = schema;
-        if (schemaFilterPattern) {
+        if (schemaFilterPattern && !mergeWithExisting) {
           try {
             const regex = new RegExp(schemaFilterPattern);
             filteredSchema = schema.filter(t => {
@@ -238,29 +257,20 @@ export const useDataSourceStore = create<DataSourceStore>()(
           })),
         }));
 
-        set((state) => {
-          let mergedTables: TableInfo[] = processedSchema;
-
-          if (mergeWithExisting && state.schema.length > 0) {
-            const existingTableNames = new Set(state.schema.map(t => t.tableName));
-            const newTables = processedSchema.filter(t => !existingTableNames.has(t.tableName));
-            mergedTables = [...state.schema, ...newTables];
-          }
-
-          return {
-            schema: mergedTables,
-            schemaLoading: false,
-            abortController: null,
-            lastSchemaUpdate: new Date(),
-          };
+        set({
+          schema: processedSchema,
+          schemaLoading: false,
+          abortController: null,
+          schemaProgress: null,
+          lastSchemaUpdate: new Date(),
         });
       } catch (error) {
         if ((error as Error).message === 'Operation cancelled' || controller.signal.aborted) {
-          set({ schema: currentSchema, schemaLoading: false, abortController: null });
+          set({ schema: currentSchema, schemaLoading: false, abortController: null, schemaProgress: null });
           return;
         }
         console.error('Failed to load schema:', error);
-        set({ schema: currentSchema, schemaLoading: false, schemaError: (error as Error).message, abortController: null });
+        set({ schema: currentSchema, schemaLoading: false, schemaError: (error as Error).message, abortController: null, schemaProgress: null });
       }
     },
 
@@ -298,8 +308,9 @@ export const useDataSourceStore = create<DataSourceStore>()(
 
       removeTable: async (tableName: string) => {
         const { activeDataSource } = get();
+        const key = tableName.trim().toUpperCase();
         set((state) => ({
-          schema: state.schema.filter(t => t.tableName !== tableName),
+          schema: state.schema.filter((t) => t.tableName.trim().toUpperCase() !== key),
         }));
         if (activeDataSource?.id) {
           await window.electronAPI.removeTableFromCache(activeDataSource.id, tableName);
@@ -308,9 +319,9 @@ export const useDataSourceStore = create<DataSourceStore>()(
 
       removeTables: async (tableNames: string[]) => {
         const { activeDataSource } = get();
-        const tableNameSet = new Set(tableNames);
+        const keySet = new Set(tableNames.map((n) => n.trim().toUpperCase()));
         set((state) => ({
-          schema: state.schema.filter(t => !tableNameSet.has(t.tableName)),
+          schema: state.schema.filter((t) => !keySet.has(t.tableName.trim().toUpperCase())),
         }));
         if (activeDataSource?.id) {
           await window.electronAPI.removeTablesFromCache(activeDataSource.id, tableNames);
@@ -318,18 +329,18 @@ export const useDataSourceStore = create<DataSourceStore>()(
       },
 
       refreshSchema: async (dataSourceId?: string) => {
-        const { activeDataSource, filterEmptyTables } = get();
+        const { activeDataSource, filterEmptyTables, filterNoCommentTables } = get();
         const id = dataSourceId || activeDataSource?.id;
         if (id) {
-          await get().loadSchema(id, false, false, filterEmptyTables);
+          await get().loadSchema(id, false, false, filterEmptyTables, filterNoCommentTables);
         }
       },
 
       refreshSchemaWithMerge: async (dataSourceId?: string) => {
-        const { activeDataSource, filterEmptyTables } = get();
+        const { activeDataSource, filterEmptyTables, filterNoCommentTables } = get();
         const id = dataSourceId || activeDataSource?.id;
         if (id) {
-          await get().loadSchema(id, false, true, filterEmptyTables);
+          await get().loadSchema(id, false, true, filterEmptyTables, filterNoCommentTables);
         }
       },
 
@@ -343,7 +354,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
       } catch (error) {
         console.error('Error cancelling schema load:', error);
       }
-      set({ schemaLoading: false, abortController: null });
+      set({ schemaLoading: false, abortController: null, schemaProgress: null });
     },
 
       setSchemaFilterPattern: (pattern) => {
@@ -364,6 +375,10 @@ export const useDataSourceStore = create<DataSourceStore>()(
 
     setFilterEmptyTables: (value) => {
       set({ filterEmptyTables: value });
+    },
+
+    setFilterNoCommentTables: (value) => {
+      set({ filterNoCommentTables: value });
     },
 
       setFilterRules: (rules) => {
@@ -454,6 +469,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
         schemaFilterPattern: state.schemaFilterPattern,
         schemaFilterHistory: state.schemaFilterHistory,
         savedQueryConditionTemplates: state.savedQueryConditionTemplates,
+        filterNoCommentTables: state.filterNoCommentTables,
       }),
     }
   )

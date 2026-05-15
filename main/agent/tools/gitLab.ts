@@ -20,42 +20,91 @@ export function updateGitLabConfig(config: Partial<GitLabConfig>) {
   if (config.defaultBranch) GITLAB_CONFIG.defaultBranch = config.defaultBranch;
 }
 
-async function getFileContent(repoUrl: string, token: string, filePath: string, branch: string): Promise<string | null> {
+async function getFileContent(
+  repoUrl: string,
+  token: string,
+  filePath: string,
+  branch: string,
+  startLine?: number,
+  endLine?: number,
+  searchPattern?: string
+): Promise<string | null> {
   try {
-    // 从仓库URL中提取项目路径
     let projectPath = repoUrl;
     if (projectPath.startsWith('http')) {
       projectPath = projectPath.replace(/^https?:\/\/gitlab\.zoesoft\.com\.cn\//, '');
     }
-    
+
+    console.log('Fetching file:', filePath);
     console.log('Original repo URL:', repoUrl);
     console.log('Extracted project path:', projectPath);
-    
-    // GitLab API 项目路径需要把 / 替换为 %2F
+
     const encodedFilePath = filePath.replace(/\//g, '%2F');
     const encodedProjectPath = projectPath.replace(/\//g, '%2F');
-    
-    // 尝试第一个分支
+
     let url = `${GITLAB_CONFIG.baseUrl}/api/v4/projects/${encodedProjectPath}/repository/files/${encodedFilePath}?ref=${branch}&private_token=${token}`;
     console.log('GitLab file URL (attempt 1):', url);
-    
+
     let response = await fetch(url);
-    
-    // 如果失败，尝试另一个常见分支名：main <-> master
+
     if (!response.ok) {
       const fallbackBranch = branch === 'main' ? 'master' : 'main';
       url = `${GITLAB_CONFIG.baseUrl}/api/v4/projects/${encodedProjectPath}/repository/files/${encodedFilePath}?ref=${fallbackBranch}&private_token=${token}`;
       console.log(`GitLab file URL (attempt 2 with branch ${fallbackBranch}):`, url);
       response = await fetch(url);
     }
-    
+
     if (!response.ok) {
       console.error(`GitLab file fetch failed: ${response.status} for ${url}`);
       return null;
     }
 
     const data = await response.json() as any;
-    return Buffer.from(data.content, 'base64').toString('utf-8');
+    const fullContent = Buffer.from(data.content, 'base64').toString('utf-8');
+    const allLines = fullContent.split('\n');
+    const totalLines = allLines.length;
+
+    if (searchPattern) {
+      const matched: string[] = [];
+      const lowerPattern = searchPattern.toLowerCase();
+      for (let i = 0; i < allLines.length; i++) {
+        if (allLines[i].toLowerCase().includes(lowerPattern)) {
+          const start = Math.max(0, i - 10);
+          const end = Math.min(allLines.length, i + 11);
+          if (matched.length > 0) matched.push('---');
+          matched.push(`[匹配行 ${i + 1}，上下文 ${start + 1}-${end}]:`);
+          matched.push(...allLines.slice(start, end));
+        }
+      }
+      if (matched.length === 0) {
+        return `在文件中未找到 "${searchPattern}"\n文件共 ${totalLines} 行，请尝试其他关键词`;
+      }
+      const result = matched.join('\n');
+      if (result.length > 8000) {
+        return result.substring(0, 8000) + `\n... (搜索结果过长已截断，共 ${totalLines} 行，请缩小搜索范围)`;
+      }
+      return result;
+    }
+
+    if (startLine !== undefined && endLine !== undefined) {
+      const start = Math.max(1, startLine) - 1;
+      const end = Math.min(totalLines, endLine);
+      const selected = allLines.slice(start, end);
+      let result = selected.map((l, i) => `${start + i + 1}: ${l}`).join('\n');
+      if (result.length > 10000) {
+        result = selected.slice(0, 400).map((l, i) => `${start + i + 1}: ${l}`).join('\n');
+        result += `\n... (截断，共 ${end - start} 行，请缩小 startLine/endLine 范围)`;
+      }
+      return result;
+    }
+
+    const MAX_LINES = 300;
+    if (totalLines > MAX_LINES) {
+      const preview = allLines.slice(0, MAX_LINES).map((l, i) => `${i + 1}: ${l}`).join('\n');
+      return preview + `\n\n⚠️ 文件共 ${totalLines} 行，仅显示前 ${MAX_LINES} 行。\n💡 提示：使用 startLine + endLine 参数获取指定行范围，或使用 searchPattern 搜索关键词（如方法名、类名）。`;
+    }
+
+    return allLines.map((l, i) => `${i + 1}: ${l}`).join('\n');
   } catch (error) {
     console.error('GitLab file content error:', error);
     return null;
@@ -64,41 +113,85 @@ async function getFileContent(repoUrl: string, token: string, filePath: string, 
 
 async function listRepositoryFiles(repoUrl: string, token: string, path: string = '', branch: string): Promise<string[]> {
   try {
-    // 从仓库URL中提取项目路径
     let projectPath = repoUrl;
     if (projectPath.startsWith('http')) {
       projectPath = projectPath.replace(/^https?:\/\/gitlab\.zoesoft\.com\.cn\//, '');
     }
-    
+
     console.log('Original repo URL:', repoUrl);
     console.log('Extracted project path:', projectPath);
     console.log('Requested branch:', branch);
-    
-    // GitLab API 项目路径需要把 / 替换为 %2F
-    const encodedPath = path.replace(/\//g, '%2F');
+
     const encodedProjectPath = projectPath.replace(/\//g, '%2F');
-    
-    // 尝试第一个分支
-    let url = `${GITLAB_CONFIG.baseUrl}/api/v4/projects/${encodedProjectPath}/repository/tree?path=${encodedPath}&ref=${branch}&private_token=${token}`;
-    console.log('GitLab tree URL (attempt 1):', url);
-    
-    let response = await fetch(url);
-    
-    // 如果失败，尝试另一个常见分支名：main <-> master
-    if (!response.ok) {
-      const fallbackBranch = branch === 'main' ? 'master' : 'main';
-      url = `${GITLAB_CONFIG.baseUrl}/api/v4/projects/${encodedProjectPath}/repository/tree?path=${encodedPath}&ref=${fallbackBranch}&private_token=${token}`;
-      console.log(`GitLab tree URL (attempt 2 with branch ${fallbackBranch}):`, url);
-      response = await fetch(url);
-    }
-    
-    if (!response.ok) {
-      console.error(`GitLab list files failed: ${response.status} for ${url}`);
-      return [];
+
+    const fetchTree = async (dirPath: string, useBranch: string): Promise<any[]> => {
+      const encodedPath = dirPath.replace(/\//g, '%2F');
+      const url = `${GITLAB_CONFIG.baseUrl}/api/v4/projects/${encodedProjectPath}/repository/tree?path=${encodedPath}&ref=${useBranch}&per_page=100&private_token=${token}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      return await resp.json() as any[];
+    };
+
+    const tryBranches = async (dirPath: string): Promise<any[]> => {
+      let entries = await fetchTree(dirPath, branch);
+      if (entries.length === 0) {
+        const fallback = branch === 'main' ? 'master' : (branch === 'master' ? 'main' : 'master');
+        if (fallback !== branch) {
+          console.log(`Empty result for ${branch}, trying ${fallback}...`);
+          entries = await fetchTree(dirPath, fallback);
+        }
+      }
+      return entries;
+    };
+
+    let allFiles: string[] = [];
+
+    const rootEntries = await tryBranches('');
+    const rootBlobs = rootEntries.filter((e: any) => e.type === 'blob').map((e: any) => e.path);
+    const rootTrees = rootEntries.filter((e: any) => e.type === 'tree').map((e: any) => e.path);
+    allFiles.push(...rootBlobs);
+
+    const isSourceLike = (name: string) =>
+      /\.(java|ts|js|vue|tsx|jsx|py|go|rs|kt|scala|cs|rb|php)$/i.test(name);
+
+    const visited = new Set<string>();
+
+    for (const tree of rootTrees.slice(0, 10)) {
+      if (visited.has(tree)) continue;
+      visited.add(tree);
+
+      const entries = await tryBranches(tree);
+      const treeBlobs = entries.filter((e: any) => e.type === 'blob').map((e: any) => e.path);
+      const treeTrees = entries.filter((e: any) => e.type === 'tree').map((e: any) => e.path);
+      allFiles.push(...treeBlobs);
+
+      const hasSourceFiles = treeBlobs.some(isSourceLike);
+      const isSourceDir = /^(src|lib|app|pages|components|views|router|store|modules|services|controllers|models|utils|common|config)$/i.test(tree.split('/').pop() || '');
+
+      if (hasSourceFiles || isSourceDir) {
+        for (const nested of treeTrees.slice(0, 5)) {
+          const nestedPath = nested;
+          if (visited.has(nestedPath)) continue;
+          visited.add(nestedPath);
+          const nestedEntries = await tryBranches(nestedPath);
+          const nestedBlobs = nestedEntries.filter((e: any) => e.type === 'blob').map((e: any) => e.path);
+          allFiles.push(...nestedBlobs);
+
+          if (nestedBlobs.some(isSourceLike)) {
+            const deepTrees = nestedEntries.filter((e: any) => e.type === 'tree').map((e: any) => e.path);
+            for (const deep of deepTrees.slice(0, 3)) {
+              if (visited.has(deep)) continue;
+              visited.add(deep);
+              const deepEntries = await tryBranches(deep);
+              allFiles.push(...deepEntries.filter((e: any) => e.type === 'blob').map((e: any) => e.path));
+            }
+          }
+        }
+      }
     }
 
-    const files = await response.json() as any[];
-    return files.filter((f: any) => f.type === 'blob').map((f: any) => f.path);
+    console.log(`Found ${allFiles.length} files total`);
+    return allFiles;
   } catch (error) {
     console.error('GitLab list files error:', error);
     return [];
@@ -110,11 +203,14 @@ export async function getCode(
   filePath?: string,
   branch?: string,
   tag?: string,
-  projectId?: string
+  projectId?: string,
+  startLine?: number,
+  endLine?: number,
+  searchPattern?: string
 ): Promise<ToolResult> {
   try {
     console.log('========== [GET_CODE] START ==========');
-    console.log('Input params:', { serviceName, filePath, branch, tag, projectId });
+    console.log('Input params:', { serviceName, filePath, branch, tag, projectId, startLine, endLine, searchPattern });
     
     // 如果提供了 projectId，尝试从代码仓库配置中匹配
     let repoConfig: any = null;
@@ -173,7 +269,7 @@ export async function getCode(
       console.log(`Inferred branch from tag ${tag}: ${targetBranch}`);
     }
     if (!targetBranch) {
-      targetBranch = repoConfig.defaultBranch || 'master';
+      targetBranch = 'master';
     }
 
     console.log('Using branch:', targetBranch);
@@ -190,9 +286,30 @@ export async function getCode(
 
     console.log('========== [GET_CODE] Fetching from GitLab ==========');
     
+    if (!filePath && (searchPattern || startLine !== undefined || endLine !== undefined)) {
+      return {
+        success: false,
+        error: '使用 searchPattern/startLine/endLine 时必须指定 filePath。请先用不带参数的 get_code 获取文件列表，再选择具体文件搜索。'
+      };
+    }
+
     if (filePath) {
+      const lastSegment = filePath.split('/').pop() || '';
+      const isDirectoryLike =
+        filePath.endsWith('/') ||
+        !lastSegment.includes('.') ||
+        /^(src|resources|mapper|dao|service|controller|config|model|entity|dto|vo|utils|common|handler|filter|interceptor|listener|aspect|enums|exception|feign|impl)$/i.test(lastSegment);
+
+      if (isDirectoryLike) {
+        console.log(`⚠️ Path looks like a directory: ${filePath}`);
+        return {
+          success: false,
+          error: `"${filePath}" 看起来是一个目录而不是文件。请先用不带 filePath 的 get_code 获取文件列表，找到具体的文件名后再获取内容。提示：MyBatis XML 映射文件通常位于 resources/mapper/ 目录下。`
+        };
+      }
+
       console.log(`Fetching file: ${filePath}`);
-      const content = await getFileContent(repoConfig.repositoryUrl, token, filePath, targetBranch);
+      const content = await getFileContent(repoConfig.repositoryUrl, token, filePath, targetBranch, startLine, endLine, searchPattern);
       
       if (content === null) {
         console.log(`❌ Failed to get file: ${filePath}`);
@@ -223,11 +340,9 @@ export async function getCode(
         };
       }
 
-      const codeFiles = files
-        .filter(f => f.endsWith('.java') || f.endsWith('.ts') || f.endsWith('.js') || f.endsWith('.vue') || f.endsWith('.tsx') || f.endsWith('.jsx'))
-        .slice(0, 20);
+      const codeFiles = files.slice(0, 30);
 
-      console.log(`✅ Found ${files.length} files (showing ${codeFiles.length} code files)`);
+      console.log(`✅ Found ${files.length} files (showing ${codeFiles.length})`);
       return { 
         success: true, 
         data: {

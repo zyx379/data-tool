@@ -3,6 +3,7 @@ import { getCode, buildCodeQueryPrompt } from './gitLab';
 import { queryBusinessData, buildDataQueryPrompt } from './queryBusinessData';
 import { queryMoreLogs, buildMoreLogsPrompt } from './queryMoreLogs';
 import { getTableSchema, buildTableSchemaPrompt } from './getTableSchema';
+import { querySqlLog, buildSqlLogPrompt } from './querySqlLog';
 import { ToolResult } from '../types';
 import { TOOL_DEFINITIONS } from '../config';
 
@@ -28,7 +29,7 @@ export async function executeTool(
       return queryLog(args, context.projectId, context.apiBaseUrl, context.apiToken, context.apiLogPath, context.apiTokenPath);
 
     case 'get_code':
-      return getCode(args.serviceName, args.filePath, args.branch, args.tag, context.projectId);
+      return getCode(args.serviceName, args.filePath, args.branch, args.tag, context.projectId, args.startLine, args.endLine, args.searchPattern);
 
     case 'query_business_data':
       return queryBusinessData(args.sql, context.projectId, args.description);
@@ -44,6 +45,9 @@ export async function executeTool(
 
     case 'get_table_schema':
       return getTableSchema(args.tableNamePattern);
+
+    case 'query_sql_log':
+      return querySqlLog(args, context.projectId, context.apiBaseUrl, context.apiToken, context.apiLogPath);
 
     default:
       return { success: false, error: `未知工具: ${toolName}` };
@@ -75,11 +79,17 @@ export function buildToolPrompt(
     case 'get_table_schema':
       return buildTableSchemaPrompt(args, result.data);
 
+    case 'query_sql_log':
+      return buildSqlLogPrompt(args, result.data);
+
     default:
       return `工具 ${toolName} 执行成功，返回数据: ${JSON.stringify(result.data, null, 2)}`;
   }
 }
 
 export function getToolDefinitions() {
-  return TOOL_DEFINITIONS;
+  return TOOL_DEFINITIONS.map(tool => ({
+    type: 'function' as const,
+    function: tool,
+  }));
 }

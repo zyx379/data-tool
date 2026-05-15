@@ -3,6 +3,7 @@ export interface SchemaProgress {
     total: number;
     currentTable: string;
     phase: 'loading' | 'processing' | 'complete' | 'error';
+    detail?: string;
 }
 export interface AnalysisRequest {
     description: string;
@@ -155,7 +156,7 @@ export interface ElectronAPI {
     }>;
     getQueryHistory: () => Promise<any[]>;
     clearQueryHistory: () => Promise<void>;
-    getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean, filterEmptyTables?: boolean) => Promise<any[]>;
+    getSchema: (dataSourceId: string, ownerFilter?: string, tableNamePattern?: string, useCache?: boolean, filterEmptyTables?: boolean, mergeWithExistingCache?: boolean, filterNoCommentTables?: boolean) => Promise<any[]>;
     getSchemaFromCache: (dataSourceId: string) => Promise<any[]>;
     executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
     onSchemaProgress: (callback: (progress: SchemaProgress) => void) => () => void;
@@ -186,6 +187,15 @@ export interface ElectronAPI {
     onAnalysisStepComplete: (callback: (stepData: AnalysisStepData) => void) => () => void;
     onAnalysisStepError: (callback: (stepData: AnalysisStepData) => void) => () => void;
     onAnalysisStreamChunk: (callback: (content: string) => void) => () => void;
+    sendChatMessage: (projectId: string, message: string) => Promise<{
+        success: boolean;
+        content?: string;
+        message?: string;
+    }>;
+    onChatStreamChunk: (callback: (data: {
+        projectId: string;
+        chunk: string;
+    }) => void) => () => void;
     testRedisConnection: (config: RedisConfig) => Promise<{
         success: boolean;
         message: string;
