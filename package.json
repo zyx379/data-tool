@@ -12,7 +12,8 @@
     "build:renderer": "vite build",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:sql": "npm run build:main && node dist/main/report/sqlValidator.test.js"
   },
   "dependencies": {
     "@types/ioredis": "^4.28.10",
@@ -20,10 +21,12 @@
     "axios": "^1.16.0",
     "crypto-js": "^4.2.0",
     "dmdb": "^1.0.48286",
+    "echarts": "^6.0.0",
     "ioredis": "^5.10.1",
     "oracledb": "^6.3.0",
     "sql.js": "^1.14.1",
     "uuid": "^9.0.1",
+    "xlsx": "^0.18.5",
     "zustand": "^4.5.2"
   },
   "devDependencies": {

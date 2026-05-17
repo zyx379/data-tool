@@ -52,6 +52,29 @@ const api = {
         return () => electron_1.ipcRenderer.removeListener('analysis:streamChunk', handler);
     },
     sendChatMessage: (projectId, message) => electron_1.ipcRenderer.invoke('chat:sendMessage', projectId, message),
+    report: {
+        sendMessage: (params) => electron_1.ipcRenderer.invoke('report:sendMessage', params),
+        executeQuery: (params) => electron_1.ipcRenderer.invoke('report:executeQuery', params),
+        validateSql: (sql, mode) => electron_1.ipcRenderer.invoke('report:validateSql', sql, mode),
+        validateJoin: (params) => electron_1.ipcRenderer.invoke('report:validateJoin', params),
+        getHistory: (projectId) => electron_1.ipcRenderer.invoke('report:getHistory', projectId),
+        saveHistory: (record) => electron_1.ipcRenderer.invoke('report:saveHistory', record),
+        deleteHistory: (id) => electron_1.ipcRenderer.invoke('report:deleteHistory', id),
+        clearHistory: (projectId) => electron_1.ipcRenderer.invoke('report:clearHistory', projectId),
+        getRelationships: (dataSourceId) => electron_1.ipcRenderer.invoke('report:getRelationships', dataSourceId),
+        saveRelationship: (rel) => electron_1.ipcRenderer.invoke('report:saveRelationship', rel),
+        deleteRelationship: (id) => electron_1.ipcRenderer.invoke('report:deleteRelationship', id),
+        clearRelationships: (dataSourceId) => electron_1.ipcRenderer.invoke('report:clearRelationships', dataSourceId),
+        getTemplates: (projectId) => electron_1.ipcRenderer.invoke('report:getTemplates', projectId),
+        saveTemplate: (tpl) => electron_1.ipcRenderer.invoke('report:saveTemplate', tpl),
+        deleteTemplate: (id) => electron_1.ipcRenderer.invoke('report:deleteTemplate', id),
+        parseExcel: (base64, fileName) => electron_1.ipcRenderer.invoke('report:parseExcel', base64, fileName),
+        onStreamChunk: (callback) => {
+            const handler = (_, data) => callback(data);
+            electron_1.ipcRenderer.on('report:streamChunk', handler);
+            return () => electron_1.ipcRenderer.removeListener('report:streamChunk', handler);
+        },
+    },
     onChatStreamChunk: (callback) => {
         const handler = (_, data) => callback(data);
         electron_1.ipcRenderer.on('chat:streamChunk', handler);

@@ -9,6 +9,8 @@ const oracle_1 = require("../database/oracle");
 const dameng_1 = require("../database/dameng");
 const redis_1 = require("../redis");
 const gitLab_1 = require("../agent/tools/gitLab");
+const report_1 = require("../report");
+const reportStorage_1 = require("../database/reportStorage");
 let currentAbortController = null;
 const chatSessions = new Map();
 function registerIpcHandlers() {
@@ -768,6 +770,127 @@ function registerIpcHandlers() {
                 success: false,
                 message: error.message || '对话过程发生错误',
             };
+        }
+    });
+    // ==================== AI 报表 ====================
+    electron_1.ipcMain.handle('report:sendMessage', async (_event, params) => {
+        try {
+            const globalConfig = (0, sqlite_1.getGlobalConfig)();
+            if (!globalConfig?.deepseekApiKey) {
+                return { success: false, message: '请先在项目管理中配置 DeepSeek API Key' };
+            }
+            if (params.resetSession) {
+                (0, report_1.clearReportSession)(params.sessionKey);
+            }
+            const session = (0, report_1.getOrCreateReportSession)(params.sessionKey, {
+                projectId: params.projectId,
+                dataSourceId: params.dataSourceId,
+                dbType: params.dbType,
+            });
+            const mainWindow = electron_1.BrowserWindow.getAllWindows()[0];
+            if (!mainWindow) {
+                throw new Error('未找到主窗口');
+            }
+            const result = await session.sendMessage(params.message, (chunk) => {
+                mainWindow.webContents.send('report:streamChunk', { sessionKey: params.sessionKey, chunk });
+            });
+            return {
+                success: true,
+                content: result.content,
+                conversation: session.getConversation(),
+            };
+        }
+        catch (error) {
+            console.error('Report chat error:', error);
+            return { success: false, message: error.message || '对话失败' };
+        }
+    });
+    electron_1.ipcMain.handle('report:executeQuery', async (_event, params) => {
+        try {
+            const session = (0, report_1.getOrCreateReportSession)(params.sessionKey, {
+                projectId: params.projectId,
+                dataSourceId: params.dataSourceId,
+                dbType: params.dbType,
+            });
+            const result = await session.executeSelect(params.sql);
+            return { success: true, ...result };
+        }
+        catch (error) {
+            return { success: false, message: error.message };
+        }
+    });
+    electron_1.ipcMain.handle('report:validateSql', async (_event, sql, mode) => {
+        const validation = (0, report_1.validateSql)(sql, mode || 'select_only');
+        return validation;
+    });
+    electron_1.ipcMain.handle('report:validateJoin', async (_event, params) => {
+        try {
+            const session = (0, report_1.getOrCreateReportSession)(params.sessionKey, {
+                projectId: params.projectId,
+                dataSourceId: params.dataSourceId,
+                dbType: params.dbType,
+            });
+            return await session.validateJoin(params.leftTable, params.leftColumn, params.rightTable, params.rightColumn);
+        }
+        catch (error) {
+            return { success: false, message: error.message };
+        }
+    });
+    electron_1.ipcMain.handle('report:getHistory', async (_event, projectId) => {
+        return (0, reportStorage_1.getReportHistory)(projectId);
+    });
+    electron_1.ipcMain.handle('report:saveHistory', async (_event, record) => {
+        return (0, reportStorage_1.saveReportHistory)(record);
+    });
+    electron_1.ipcMain.handle('report:deleteHistory', async (_event, id) => {
+        (0, reportStorage_1.deleteReportHistory)(id);
+        return { success: true };
+    });
+    electron_1.ipcMain.handle('report:clearHistory', async (_event, projectId) => {
+        (0, reportStorage_1.clearReportHistory)(projectId);
+        return { success: true };
+    });
+    electron_1.ipcMain.handle('report:getRelationships', async (_event, dataSourceId) => {
+        return (0, reportStorage_1.getTableRelationshipsByDs)(dataSourceId);
+    });
+    electron_1.ipcMain.handle('report:saveRelationship', async (_event, rel) => {
+        return (0, reportStorage_1.saveTableRelationship)(rel);
+    });
+    electron_1.ipcMain.handle('report:deleteRelationship', async (_event, id) => {
+        (0, reportStorage_1.deleteTableRelationship)(id);
+        return { success: true };
+    });
+    electron_1.ipcMain.handle('report:clearRelationships', async (_event, dataSourceId) => {
+        (0, reportStorage_1.clearTableRelationships)(dataSourceId);
+        return { success: true };
+    });
+    electron_1.ipcMain.handle('report:getTemplates', async (_event, projectId) => {
+        return (0, reportStorage_1.getReportTemplates)(projectId);
+    });
+    electron_1.ipcMain.handle('report:saveTemplate', async (_event, tpl) => {
+        return (0, reportStorage_1.saveReportTemplate)(tpl);
+    });
+    electron_1.ipcMain.handle('report:deleteTemplate', async (_event, id) => {
+        (0, reportStorage_1.deleteReportTemplate)(id);
+        return { success: true };
+    });
+    electron_1.ipcMain.handle('report:parseExcel', async (_event, base64, fileName) => {
+        try {
+            const XLSX = require('xlsx');
+            const buffer = Buffer.from(base64, 'base64');
+            const workbook = XLSX.read(buffer, { type: 'buffer' });
+            const sheetNames = workbook.SheetNames;
+            const sheets = sheetNames.map((name) => {
+                const sheet = workbook.Sheets[name];
+                const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+                const headers = (data[0] || []).map(String);
+                const rows = data.slice(1, 6);
+                return { name, headers, previewRows: rows, totalRows: Math.max(0, data.length - 1) };
+            });
+            return { success: true, fileName, sheets };
+        }
+        catch (error) {
+            return { success: false, message: error.message };
         }
     });
 }

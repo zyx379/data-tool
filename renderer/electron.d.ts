@@ -174,6 +174,38 @@ export interface ElectronAPI {
     testDataSourceConnection: (ds: any) => Promise<{ success: boolean; message: string }>;
     executeQuery: (dataSourceId: string, sql: string) => Promise<any>;
   };
+  report: {
+    sendMessage: (params: {
+      sessionKey: string;
+      projectId: string;
+      dataSourceId: string;
+      dbType: 'oracle' | 'dameng';
+      message: string;
+      resetSession?: boolean;
+    }) => Promise<{ success: boolean; content?: string; conversation?: any[]; message?: string }>;
+    executeQuery: (params: {
+      sessionKey: string;
+      projectId: string;
+      dataSourceId: string;
+      dbType: 'oracle' | 'dameng';
+      sql: string;
+    }) => Promise<{ success: boolean; columns?: string[]; rows?: any[][]; rowCount?: number; executionTime?: number; message?: string }>;
+    validateSql: (sql: string, mode?: string) => Promise<{ valid: boolean; reason?: string }>;
+    validateJoin: (params: any) => Promise<{ success: boolean; message: string }>;
+    getHistory: (projectId: string) => Promise<any[]>;
+    saveHistory: (record: any) => Promise<any>;
+    deleteHistory: (id: string) => Promise<{ success: boolean }>;
+    clearHistory: (projectId: string) => Promise<{ success: boolean }>;
+    getRelationships: (dataSourceId: string) => Promise<any[]>;
+    saveRelationship: (rel: any) => Promise<any>;
+    deleteRelationship: (id: string) => Promise<{ success: boolean }>;
+    clearRelationships: (dataSourceId: string) => Promise<{ success: boolean }>;
+    getTemplates: (projectId: string) => Promise<any[]>;
+    saveTemplate: (tpl: any) => Promise<any>;
+    deleteTemplate: (id: string) => Promise<{ success: boolean }>;
+    parseExcel: (base64: string, fileName: string) => Promise<any>;
+    onStreamChunk: (callback: (data: { sessionKey: string; chunk: string }) => void) => () => void;
+  };
 }
 
 declare global {

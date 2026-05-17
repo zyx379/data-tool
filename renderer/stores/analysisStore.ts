@@ -59,6 +59,7 @@ interface AnalysisState {
   clearStreamContent: () => void;
   finishAnalysis: (error?: string) => void;
 
+  setCurrentRecordId: (id: string | null) => void;
   deleteRecord: (id: string) => void;
   clearAllRecords: () => void;
 }
@@ -176,6 +177,8 @@ export const useAnalysisStore = create<AnalysisState>()(
           };
         });
       },
+
+      setCurrentRecordId: (id) => set({ currentRecordId: id }),
 
       deleteRecord: (id) => {
         set((state) => ({

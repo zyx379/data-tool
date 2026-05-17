@@ -12,6 +12,7 @@ import {
   getSchemaCacheDir,
 } from './schemaCacheFiles';
 import { mergeSchemaIncremental, schemaTableKey } from './schemaMerge';
+import { initReportTables, invalidateTableRelationships } from './reportStorage';
 
 const ENCRYPTION_KEY = 'zoe-devops-encryption-key-v1';
 const OLD_ENCRYPTION_KEY = 'zoehis-helper-encryption-key-v1';
@@ -82,7 +83,7 @@ export interface GlobalConfigRecord {
 let db: SqlJsDatabase | null = null;
 let dbPath: string = '';
 
-function saveDatabase() {
+export function saveDatabase() {
   if (db) {
     try {
       const data = db.export();
@@ -426,6 +427,8 @@ export async function initDatabase() {
   ensureSchemaCacheDir();
   migrateSchemaCacheFromSqliteToFiles();
 
+  initReportTables();
+
   saveDatabase();
   console.log('Database initialized successfully');
 }
@@ -439,7 +442,7 @@ export function closeDatabase() {
   }
 }
 
-function getDb() {
+export function getDb() {
   if (!db) {
     throw new Error('Database not initialized');
   }
@@ -656,6 +659,11 @@ export function getSchemaCache(dataSourceId: string, filterPattern?: string, mat
 export function setSchemaCache(dataSourceId: string, schemaData: any[], filterPattern?: string) {
   void filterPattern;
   console.log('[schema-cache] setSchemaCache', dataSourceId, 'table count:', schemaData.length);
+  try {
+    invalidateTableRelationships(dataSourceId);
+  } catch (e) {
+    console.warn('[report] invalidate relationships on schema refresh:', e);
+  }
   writeSchemaCacheToFile(dataSourceId, schemaData);
   const database = getDb();
   try {

@@ -192,6 +192,28 @@ export interface ElectronAPI {
         content?: string;
         message?: string;
     }>;
+    report: {
+        sendMessage: (params: any) => Promise<any>;
+        executeQuery: (params: any) => Promise<any>;
+        validateSql: (sql: string, mode?: string) => Promise<any>;
+        validateJoin: (params: any) => Promise<any>;
+        getHistory: (projectId: string) => Promise<any[]>;
+        saveHistory: (record: any) => Promise<any>;
+        deleteHistory: (id: string) => Promise<any>;
+        clearHistory: (projectId: string) => Promise<any>;
+        getRelationships: (dataSourceId: string) => Promise<any[]>;
+        saveRelationship: (rel: any) => Promise<any>;
+        deleteRelationship: (id: string) => Promise<any>;
+        clearRelationships: (dataSourceId: string) => Promise<any>;
+        getTemplates: (projectId: string) => Promise<any[]>;
+        saveTemplate: (tpl: any) => Promise<any>;
+        deleteTemplate: (id: string) => Promise<any>;
+        parseExcel: (base64: string, fileName: string) => Promise<any>;
+        onStreamChunk: (callback: (data: {
+            sessionKey: string;
+            chunk: string;
+        }) => void) => () => void;
+    };
     onChatStreamChunk: (callback: (data: {
         projectId: string;
         chunk: string;

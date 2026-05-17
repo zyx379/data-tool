@@ -3,8 +3,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.saveDatabase = saveDatabase;
 exports.initDatabase = initDatabase;
 exports.closeDatabase = closeDatabase;
+exports.getDb = getDb;
 exports.encryptPassword = encryptPassword;
 exports.decryptPassword = decryptPassword;
 exports.getAllDataSources = getAllDataSources;
@@ -57,6 +59,7 @@ const crypto_js_1 = __importDefault(require("crypto-js"));
 const uuid_1 = require("uuid");
 const schemaCacheFiles_1 = require("./schemaCacheFiles");
 const schemaMerge_1 = require("./schemaMerge");
+const reportStorage_1 = require("./reportStorage");
 const ENCRYPTION_KEY = 'zoe-devops-encryption-key-v1';
 const OLD_ENCRYPTION_KEY = 'zoehis-helper-encryption-key-v1';
 let db = null;
@@ -393,6 +396,7 @@ async function initDatabase() {
     }
     (0, schemaCacheFiles_1.ensureSchemaCacheDir)();
     migrateSchemaCacheFromSqliteToFiles();
+    (0, reportStorage_1.initReportTables)();
     saveDatabase();
     console.log('Database initialized successfully');
 }
@@ -586,6 +590,12 @@ function getSchemaCache(dataSourceId, filterPattern, matchAnyFilter = false) {
 function setSchemaCache(dataSourceId, schemaData, filterPattern) {
     void filterPattern;
     console.log('[schema-cache] setSchemaCache', dataSourceId, 'table count:', schemaData.length);
+    try {
+        (0, reportStorage_1.invalidateTableRelationships)(dataSourceId);
+    }
+    catch (e) {
+        console.warn('[report] invalidate relationships on schema refresh:', e);
+    }
     (0, schemaCacheFiles_1.writeSchemaCacheToFile)(dataSourceId, schemaData);
     const database = getDb();
     try {

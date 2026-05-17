@@ -186,6 +186,25 @@ export interface ElectronAPI {
   onAnalysisStepError: (callback: (stepData: AnalysisStepData) => void) => () => void;
   onAnalysisStreamChunk: (callback: (content: string) => void) => () => void;
   sendChatMessage: (projectId: string, message: string) => Promise<{ success: boolean; content?: string; message?: string }>;
+  report: {
+    sendMessage: (params: any) => Promise<any>;
+    executeQuery: (params: any) => Promise<any>;
+    validateSql: (sql: string, mode?: string) => Promise<any>;
+    validateJoin: (params: any) => Promise<any>;
+    getHistory: (projectId: string) => Promise<any[]>;
+    saveHistory: (record: any) => Promise<any>;
+    deleteHistory: (id: string) => Promise<any>;
+    clearHistory: (projectId: string) => Promise<any>;
+    getRelationships: (dataSourceId: string) => Promise<any[]>;
+    saveRelationship: (rel: any) => Promise<any>;
+    deleteRelationship: (id: string) => Promise<any>;
+    clearRelationships: (dataSourceId: string) => Promise<any>;
+    getTemplates: (projectId: string) => Promise<any[]>;
+    saveTemplate: (tpl: any) => Promise<any>;
+    deleteTemplate: (id: string) => Promise<any>;
+    parseExcel: (base64: string, fileName: string) => Promise<any>;
+    onStreamChunk: (callback: (data: { sessionKey: string; chunk: string }) => void) => () => void;
+  };
   onChatStreamChunk: (callback: (data: { projectId: string; chunk: string }) => void) => () => void;
   testRedisConnection: (config: RedisConfig) => Promise<{ success: boolean; message: string }>;
   getRedisTokens: (config: RedisConfig, prefix?: string) => Promise<{ success: boolean; tokens: string[]; message?: string }>;
@@ -289,6 +308,29 @@ const api: ElectronAPI = {
     return () => ipcRenderer.removeListener('analysis:streamChunk', handler);
   },
   sendChatMessage: (projectId, message) => ipcRenderer.invoke('chat:sendMessage', projectId, message),
+  report: {
+    sendMessage: (params) => ipcRenderer.invoke('report:sendMessage', params),
+    executeQuery: (params) => ipcRenderer.invoke('report:executeQuery', params),
+    validateSql: (sql, mode) => ipcRenderer.invoke('report:validateSql', sql, mode),
+    validateJoin: (params) => ipcRenderer.invoke('report:validateJoin', params),
+    getHistory: (projectId) => ipcRenderer.invoke('report:getHistory', projectId),
+    saveHistory: (record) => ipcRenderer.invoke('report:saveHistory', record),
+    deleteHistory: (id) => ipcRenderer.invoke('report:deleteHistory', id),
+    clearHistory: (projectId) => ipcRenderer.invoke('report:clearHistory', projectId),
+    getRelationships: (dataSourceId) => ipcRenderer.invoke('report:getRelationships', dataSourceId),
+    saveRelationship: (rel) => ipcRenderer.invoke('report:saveRelationship', rel),
+    deleteRelationship: (id) => ipcRenderer.invoke('report:deleteRelationship', id),
+    clearRelationships: (dataSourceId) => ipcRenderer.invoke('report:clearRelationships', dataSourceId),
+    getTemplates: (projectId) => ipcRenderer.invoke('report:getTemplates', projectId),
+    saveTemplate: (tpl) => ipcRenderer.invoke('report:saveTemplate', tpl),
+    deleteTemplate: (id) => ipcRenderer.invoke('report:deleteTemplate', id),
+    parseExcel: (base64, fileName) => ipcRenderer.invoke('report:parseExcel', base64, fileName),
+    onStreamChunk: (callback) => {
+      const handler = (_: any, data: { sessionKey: string; chunk: string }) => callback(data);
+      ipcRenderer.on('report:streamChunk', handler);
+      return () => ipcRenderer.removeListener('report:streamChunk', handler);
+    },
+  },
   onChatStreamChunk: (callback) => {
     const handler = (_: any, data: { projectId: string; chunk: string }) => callback(data);
     ipcRenderer.on('chat:streamChunk', handler);

@@ -50,6 +50,20 @@ import { getOracleTables, executeOracleQuery, testOracleConnection } from '../da
 import { getDamengTables, executeDamengQuery, testDamengConnection } from '../database/dameng';
 import { testRedisConnection, getTokensFromRedis, getFirstTokenFromRedis } from '../redis';
 import { updateGitLabConfig } from '../agent/tools/gitLab';
+import { getOrCreateReportSession, clearReportSession, validateSql } from '../report';
+import {
+  getReportHistory,
+  saveReportHistory,
+  deleteReportHistory,
+  clearReportHistory,
+  getTableRelationshipsByDs,
+  saveTableRelationship,
+  deleteTableRelationship,
+  clearTableRelationships,
+  getReportTemplates,
+  saveReportTemplate,
+  deleteReportTemplate,
+} from '../database/reportStorage';
 
 let currentAbortController: AbortController | null = null;
 const chatSessions = new Map<string, ChatSession>();
@@ -869,6 +883,172 @@ export function registerIpcHandlers() {
         success: false,
         message: (error as Error).message || '对话过程发生错误',
       };
+    }
+  });
+
+  // ==================== AI 报表 ====================
+
+  ipcMain.handle('report:sendMessage', async (_event, params: {
+    sessionKey: string;
+    projectId: string;
+    dataSourceId: string;
+    dbType: 'oracle' | 'dameng';
+    message: string;
+    resetSession?: boolean;
+  }) => {
+    try {
+      const globalConfig = getGlobalConfig();
+      if (!globalConfig?.deepseekApiKey) {
+        return { success: false, message: '请先在项目管理中配置 DeepSeek API Key' };
+      }
+
+      if (params.resetSession) {
+        clearReportSession(params.sessionKey);
+      }
+
+      const session = getOrCreateReportSession(params.sessionKey, {
+        projectId: params.projectId,
+        dataSourceId: params.dataSourceId,
+        dbType: params.dbType,
+      });
+
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      if (!mainWindow) {
+        throw new Error('未找到主窗口');
+      }
+
+      const result = await session.sendMessage(params.message, (chunk) => {
+        mainWindow.webContents.send('report:streamChunk', { sessionKey: params.sessionKey, chunk });
+      });
+
+      return {
+        success: true,
+        content: result.content,
+        conversation: session.getConversation(),
+      };
+    } catch (error) {
+      console.error('Report chat error:', error);
+      return { success: false, message: (error as Error).message || '对话失败' };
+    }
+  });
+
+  ipcMain.handle('report:executeQuery', async (_event, params: {
+    sessionKey: string;
+    projectId: string;
+    dataSourceId: string;
+    dbType: 'oracle' | 'dameng';
+    sql: string;
+  }) => {
+    try {
+      const session = getOrCreateReportSession(params.sessionKey, {
+        projectId: params.projectId,
+        dataSourceId: params.dataSourceId,
+        dbType: params.dbType,
+      });
+      const result = await session.executeSelect(params.sql);
+      return { success: true, ...result };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle('report:validateSql', async (_event, sql: string, mode?: string) => {
+    const validation = validateSql(sql, (mode as 'select_only' | 'data_access') || 'select_only');
+    return validation;
+  });
+
+  ipcMain.handle('report:validateJoin', async (_event, params: {
+    sessionKey: string;
+    projectId: string;
+    dataSourceId: string;
+    dbType: 'oracle' | 'dameng';
+    leftTable: string;
+    leftColumn: string;
+    rightTable: string;
+    rightColumn: string;
+  }) => {
+    try {
+      const session = getOrCreateReportSession(params.sessionKey, {
+        projectId: params.projectId,
+        dataSourceId: params.dataSourceId,
+        dbType: params.dbType,
+      });
+      return await session.validateJoin(
+        params.leftTable,
+        params.leftColumn,
+        params.rightTable,
+        params.rightColumn
+      );
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle('report:getHistory', async (_event, projectId: string) => {
+    return getReportHistory(projectId);
+  });
+
+  ipcMain.handle('report:saveHistory', async (_event, record: any) => {
+    return saveReportHistory(record);
+  });
+
+  ipcMain.handle('report:deleteHistory', async (_event, id: string) => {
+    deleteReportHistory(id);
+    return { success: true };
+  });
+
+  ipcMain.handle('report:clearHistory', async (_event, projectId: string) => {
+    clearReportHistory(projectId);
+    return { success: true };
+  });
+
+  ipcMain.handle('report:getRelationships', async (_event, dataSourceId: string) => {
+    return getTableRelationshipsByDs(dataSourceId);
+  });
+
+  ipcMain.handle('report:saveRelationship', async (_event, rel: any) => {
+    return saveTableRelationship(rel);
+  });
+
+  ipcMain.handle('report:deleteRelationship', async (_event, id: string) => {
+    deleteTableRelationship(id);
+    return { success: true };
+  });
+
+  ipcMain.handle('report:clearRelationships', async (_event, dataSourceId: string) => {
+    clearTableRelationships(dataSourceId);
+    return { success: true };
+  });
+
+  ipcMain.handle('report:getTemplates', async (_event, projectId: string) => {
+    return getReportTemplates(projectId);
+  });
+
+  ipcMain.handle('report:saveTemplate', async (_event, tpl: any) => {
+    return saveReportTemplate(tpl);
+  });
+
+  ipcMain.handle('report:deleteTemplate', async (_event, id: string) => {
+    deleteReportTemplate(id);
+    return { success: true };
+  });
+
+  ipcMain.handle('report:parseExcel', async (_event, base64: string, fileName: string) => {
+    try {
+      const XLSX = require('xlsx');
+      const buffer = Buffer.from(base64, 'base64');
+      const workbook = XLSX.read(buffer, { type: 'buffer' });
+      const sheetNames = workbook.SheetNames;
+      const sheets = sheetNames.map((name: string) => {
+        const sheet = workbook.Sheets[name];
+        const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+        const headers = (data[0] || []).map(String);
+        const rows = data.slice(1, 6);
+        return { name, headers, previewRows: rows, totalRows: Math.max(0, data.length - 1) };
+      });
+      return { success: true, fileName, sheets };
+    } catch (error) {
+      return { success: false, message: (error as Error).message };
     }
   });
 }

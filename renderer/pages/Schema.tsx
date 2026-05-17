@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import DataSources from './DataSources';
+import ReportPage from './Report';
 import { useDataSourceStore, TableInfo, TableColumn, SavedConditionJoin } from '../stores/dataSourceStore';
 import { useAnalysisStore } from '../stores/analysisStore';
 import { useProjectStore } from '../stores/projectStore';
@@ -101,8 +102,8 @@ function whereSqlFromRows(rows: QueryConditionRow[]): string {
 }
 
 function Schema() {
-  // 主导航标签: 'query' | 'datasources' | 'analysis'
-  const [activeMainTab, setActiveMainTab] = useState<'query' | 'datasources' | 'analysis'>('query');
+  // 主导航标签: 'query' | 'datasources' | 'analysis' | 'report'
+  const [activeMainTab, setActiveMainTab] = useState<'query' | 'datasources' | 'analysis' | 'report'>('query');
   const [showRefreshModal, setShowRefreshModal] = useState(false);
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null);
@@ -370,6 +371,21 @@ function Schema() {
   useEffect(() => {
     setHasAutoAddedDefaultFields(false);
   }, [activeTabKey]);
+
+  useEffect(() => {
+    if (activeSubTab !== 'query') {
+      setShowBackToTop(false);
+      return;
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Home' && queryScrollRef.current) {
+        e.preventDefault();
+        queryScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeSubTab]);
 
   const filteredTables = schema.filter((table) => {
     if (!searchTerm) return true;
@@ -673,6 +689,17 @@ function Schema() {
             <span>智能分析</span>
           </button>
           <button
+            onClick={() => setActiveMainTab('report')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
+              activeMainTab === 'report'
+                ? 'bg-blue-500 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            }`}
+          >
+            <span>📈</span>
+            <span>AI报表</span>
+          </button>
+          <button
             onClick={() => setActiveMainTab('datasources')}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all duration-200 flex items-center gap-1.5 ${
               activeMainTab === 'datasources'
@@ -693,6 +720,8 @@ function Schema() {
         </div>
       ) : activeMainTab === 'analysis' ? (
         <AnalysisPage />
+      ) : activeMainTab === 'report' ? (
+        <ReportPage />
       ) : (
         <div className="flex-1 flex">
           {/* 表列表 */}
@@ -986,7 +1015,7 @@ function Schema() {
                   if (!activeTable) return null;
                   
                   return (
-                    <div className="flex-1 flex flex-col overflow-hidden p-6">
+                    <div className="flex min-w-0 flex-1 flex-col overflow-hidden p-6">
                       <div className="mb-6">
                         <div>
                           <div className="flex items-center gap-2 mb-1">
@@ -1156,7 +1185,7 @@ function Schema() {
 
                 {activeSubTab === 'query' && (
                   <div
-                    className="relative flex flex-1 flex-col overflow-y-auto"
+                    className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto"
                     ref={queryScrollRef}
                     onScroll={(e) => setShowBackToTop(e.currentTarget.scrollTop > 200)}
                   >
@@ -1204,8 +1233,8 @@ function Schema() {
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-start md:gap-4">
-                        <div className="flex w-full min-w-0 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[63%] md:flex-none">
+                    <div className="flex w-full min-w-0 max-w-full shrink-0 flex-col gap-3 px-4 py-3 md:flex-row md:items-start md:gap-4">
+                        <div className="flex w-full min-w-0 max-w-full flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[63%] md:max-w-[63%] md:flex-none">
                           <div className="flex flex-shrink-0 flex-col gap-2 border-b border-slate-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="min-w-0">
                               <span className="text-xs font-semibold text-slate-700">查询条件</span>
@@ -1288,7 +1317,7 @@ function Schema() {
                             </div>
                           </div>
 
-                          <div className="overflow-x-auto px-3 py-3">
+                          <div className="max-h-[min(24rem,50vh)] overflow-x-auto overflow-y-auto px-3 py-3">
                             {(queryConditions[activeTable.tableName] || []).length === 0 ? (
                               <p className="py-8 text-center text-xs text-slate-400">暂无条件，使用上方「添加字段」从已标记列中选择</p>
                             ) : (
@@ -1395,14 +1424,14 @@ function Schema() {
 
                         <div className="hidden w-px shrink-0 self-stretch bg-slate-200 md:block" aria-hidden />
 
-                        <div className="flex w-full min-w-0 flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[37%] md:flex-none">
+                        <div className="flex w-full min-w-0 max-w-full flex-col rounded-xl border border-slate-200 bg-slate-50/95 shadow-sm md:w-[37%] md:max-w-[37%] md:flex-none">
                           <div className="flex-shrink-0 border-b border-slate-200 px-3 py-2">
                             <span className="text-xs font-semibold text-slate-700">排序条件</span>
                             <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
                               拖拽 ⋮⋮ 调整顺序；点击箭头切换升序 / 降序。
                             </p>
                           </div>
-                          <div className="overflow-x-auto px-3 py-3">
+                          <div className="max-h-[min(24rem,50vh)] overflow-x-auto overflow-y-auto px-3 py-3">
                             <div className="flex flex-wrap items-center gap-2">
                               {(sortConditions[activeTable.tableName] || []).map((sort, index) => {
                                 const column = activeTable.tableInfo.columns.find(c => c.columnName === sort.columnName);
@@ -1520,7 +1549,7 @@ function Schema() {
                         </div>
                     </div>
 
-                    <div className="flex min-h-[20rem] flex-col border-t border-slate-200 bg-white">
+                    <div className="flex min-h-[20rem] w-full min-w-0 max-w-full flex-col border-t border-slate-200 bg-white">
                       {queryResults[activeTable.tableName] ? (
                         (() => {
                           const results = queryResults[activeTable.tableName];
@@ -1535,8 +1564,8 @@ function Schema() {
                               </span>
                             </h4>
                           </div>
-                          <div className="overflow-x-auto">
-                            <table className="min-w-full">
+                          <div className="w-full max-w-full overflow-x-auto">
+                            <table className="w-max min-w-full border-collapse">
                               <thead className="bg-gray-100 sticky top-0 z-10">
                                 <tr>
                                   {results.columns.map((col) => (
@@ -1555,7 +1584,7 @@ function Schema() {
                                       const isDateTimeCol = columnInfo ? isDateTimeType(columnInfo.dataType) : false;
                                       const displayValue = isDateTimeCol ? formatDateTime(cell) : (cell !== null && cell !== undefined ? String(cell) : '-');
                                       return (
-                                        <td key={i} className="px-3 py-2 text-xs border-b border-r border-gray-100 max-w-xs truncate" title={String(cell ?? '-')}>
+                                        <td key={i} className="whitespace-nowrap px-3 py-2 text-xs border-b border-r border-gray-100 max-w-xs truncate" title={String(cell ?? '-')}>
                                           {displayValue}
                                         </td>
                                       );
@@ -1586,18 +1615,17 @@ function Schema() {
                     </div>
 
                     {showBackToTop && (
-                      <div className="sticky bottom-4 flex justify-end px-4 pb-2">
-                        <button
-                          type="button"
-                          onClick={() => queryScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
-                          className="flex items-center gap-1.5 rounded-full bg-blue-500/85 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-sm transition-all hover:bg-blue-600"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
-                          </svg>
-                          回到顶部
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        aria-label="回到顶部"
+                        onClick={() => queryScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+                        className="fixed bottom-6 right-6 z-50 flex items-center gap-1.5 rounded-full bg-blue-500 px-3 py-2 text-xs font-medium text-white shadow-lg transition-all hover:bg-blue-600 hover:shadow-xl active:scale-95"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" />
+                        </svg>
+                        回到顶部
+                      </button>
                     )}
                   </div>
                 )}
@@ -2009,6 +2037,7 @@ function AnalysisPage() {
     appendStreamChunk,
     clearStreamContent,
     finishAnalysis,
+    setCurrentRecordId,
     deleteRecord,
     clearAllRecords,
   } = useAnalysisStore();
@@ -2120,9 +2149,19 @@ function AnalysisPage() {
     }
   };
 
+  const handleViewRecord = (id: string) => {
+    clearStreamContent();
+    setCurrentRecordId(id);
+    setChatMessages([]);
+    setView('detail');
+  };
+
   const handleDeleteRecord = (id: string) => {
     if (confirm('确定要删除这条分析记录吗？')) {
       deleteRecord(id);
+      if (currentRecordId === id) {
+        setView('history');
+      }
     }
   };
 
@@ -2247,7 +2286,7 @@ function AnalysisPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right space-x-2">
-                    <button onClick={() => setView('detail')} className="text-blue-600 hover:text-blue-800 text-sm">查看</button>
+                    <button onClick={() => handleViewRecord(record.id)} className="text-blue-600 hover:text-blue-800 text-sm">查看</button>
                     <button onClick={() => handleDeleteRecord(record.id)} className="text-red-600 hover:text-red-800 text-sm">删除</button>
                   </td>
                 </tr>
@@ -2315,7 +2354,7 @@ function AnalysisPage() {
               </div>
             )}
 
-            {step.status === 'loading' && step.id === 'deep_analysis' && (
+            {step.status === 'loading' && step.id === 'deep_analysis' && isAnalyzing && record.id === currentRecordId && (
               <div className="p-5">
                 <div className="flex items-center gap-2 text-blue-600 text-sm mb-3">
                   <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
